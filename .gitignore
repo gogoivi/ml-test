@@ -1,0 +1,16 @@
+# Ignore python cache files
+__pycache__/
+*.pyc
+
+# Ignore PyTorch model checkpoints and weights
+*.pt
+*.pth
+*.onnx
+
+# Ignore data storage directories
+data/
+
+# Ignore local configuration and virtual environments
+.venv/
+env/
+.env
