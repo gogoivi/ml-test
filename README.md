@@ -1,0 +1,1 @@
+Why is the GAN architecture so tricky - how do I make it so the discriminator model dpoesnt outpreform the generator by so much
