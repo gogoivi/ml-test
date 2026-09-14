@@ -69,7 +69,10 @@ def generate_image(model:VAE,device):
     z_vector=z_vector.to(device)
     output=model.block_decoder(z_vector)
     output=output.to('cpu')
-    image_tensor = output.view(height, width, channels)
+    if channels==1: 
+        image_tensor = output.view(channels, height, width).squeeze(0)
+    else:
+        image_tensor = output.view(height, width, channels)
     image_numpy = image_tensor.detach().numpy()
     plt.imshow(image_numpy)
     plt.axis("off")

@@ -17,8 +17,8 @@ def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
 
 height=28
 width=28
-epochs=50
-z_size=30
+epochs=100
+z_size=25
 
 # Copied from some of my previously written code
 if __name__=="__main__":
@@ -65,15 +65,15 @@ if __name__=="__main__":
             de_optimizer.zero_grad()
             Des_loss.backward()
             de_optimizer.step()
-
-            z_tensor = torch.normal(mean=0.0, std=1.0, size=(current_batch_size, z_size))
-            z_tensor=z_tensor.to(device)
-            ml_guess=descriminator(generator(z_tensor))
-            Gen_loss,_ =GAN_loss(ml_guess=ml_guess,real_guess=real_guess)
-            Gen_loss_sum+=Gen_loss.item()
-            ge_optimizer.zero_grad()
-            Gen_loss.backward()
-            ge_optimizer.step()
+            for _ in range(2):
+                z_tensor = torch.normal(mean=0.0, std=1.0, size=(current_batch_size, z_size))
+                z_tensor=z_tensor.to(device)
+                ml_guess=descriminator(generator(z_tensor))
+                Gen_loss,_ =GAN_loss(ml_guess=ml_guess,real_guess=real_guess)
+                Gen_loss_sum+=Gen_loss.item()
+                ge_optimizer.zero_grad()
+                Gen_loss.backward()
+                ge_optimizer.step()
         
         if i%5==0:
             print(f"D(real): {real_guess.mean().item():.4f}, D(fake): {ml_guess.mean().item():.4f}")
@@ -83,6 +83,7 @@ if __name__=="__main__":
             # generator.train() 
             # print("Generator params:",next(generator.parameters()).grad)
 
-    save_model(model=generator,target_dir="GAN_models",model_name="MNIST_Z30_E50")
+    save_model(model=generator,target_dir="GAN_models",model_name="MNIST_Z25_E60")
     for i in range(3):
         generate_img(generator,device)
+        

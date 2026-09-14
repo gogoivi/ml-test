@@ -66,8 +66,13 @@ def GAN_loss(ml_guess,real_guess):
     # Clamp so I dont get -inf in the computation
     ml_guess=torch.clamp(ml_guess, min=1e-7, max=1-1e-7)
     real_guess=torch.clamp(real_guess, min=1e-7, max=1-1e-7)
+
+    real_target = torch.full_like(real_guess, 0.9)
+    fake_target = torch.zeros_like(ml_guess)
+    gen_target = torch.ones_like(ml_guess)
     # Random number between the two so its target is always moving and thus doesnt stabilize and gives the generator a proper gradient
-    return -1*torch.log(ml_guess).mean(),-1*(torch.log(real_guess)+torch.log(random.uniform(0.8, 1.0)-ml_guess)).mean()
+    # return -1*torch.log(ml_guess).mean(),-1*(torch.log(real_guess)+torch.log(1-ml_guess)).mean()
+    return nn.functional.binary_cross_entropy(input=ml_guess,target=gen_target),(nn.functional.binary_cross_entropy(input=real_guess,target=real_target)+nn.functional.binary_cross_entropy(input=ml_guess,target=fake_target))/2
 
 
 # Taken from VAE code and adapted
@@ -78,8 +83,15 @@ def generate_img(model:Generator,device):
     z_vector=z_vector.to(device)
     output=model.forward(z_vector)
     output=output.to('cpu')
-    image_tensor = output.view(height, width, channels)
-    image_numpy = image_tensor.detach().numpy()
-    plt.imshow(image_numpy)
+    print(f"Output min: {output.min():.4f}, max: {output.max():.4f}, mean: {output.mean():.4f}")
+    if channels==1: 
+        image_tensor = output.view(channels, height, width).squeeze(0)
+        image_numpy = image_tensor.detach().numpy()
+        plt.imshow(image_numpy, cmap='gray')
+        
+    else:
+        image_tensor = output.view(height, width, channels)
+        image_numpy = image_tensor.detach().numpy()
+        plt.imshow(image_numpy)
     plt.axis("off")
     plt.show()
