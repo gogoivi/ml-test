@@ -20,9 +20,15 @@ env/
 runs/
 U-Net_models/
 
-# Ignore all PyTorch model weights / state dict files
+# PyTorch model/checkpoint files
 *.pt
 *.pth
 *.ckpt
-*.bin
-*.pkl
+
+# Model output directories
+U-Net_models/
+VAE_models/
+GAN_models/
+
+# TensorBoard training outputs
+runs/
