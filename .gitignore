@@ -1,34 +1,26 @@
-# Ignore python cache files
+# Python cache
 __pycache__/
 *.pyc
 
-# Ignore PyTorch model checkpoints and weights
-*.pt
-*.pth
-*.onnx
-
-# Ignore data storage directories
-data/
-
-# Ignore local configuration and virtual environments
-.venv/
-env/
-.env
-
-2023 Patients/
-
-runs/
-U-Net_models/
-
-# PyTorch model/checkpoint files
+# PyTorch / ML model files
 *.pt
 *.pth
 *.ckpt
+*.onnx
 
 # Model output directories
 U-Net_models/
 VAE_models/
 GAN_models/
 
-# TensorBoard training outputs
+# Training output
 runs/
+
+# Data
+data/
+2023 Patients/
+
+# Local Python environments / config
+.venv/
+env/
+.env
