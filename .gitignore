@@ -19,3 +19,10 @@ env/
 
 runs/
 U-Net_models/
+
+# Ignore all PyTorch model weights / state dict files
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.pkl
