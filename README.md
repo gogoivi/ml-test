@@ -2,6 +2,11 @@ Why is the GAN architecture so tricky - how do I make it so the discriminator mo
 
 For nn-unet just like how it uses skip connections to pass in the spacial data could I do the same thing with geometric data (through another ml model)?
 
+Dice loss?
+
+How to pass in geometric data?
+
+How to make it so that the unet output doesnt only output disconnected structures - thery should be connected
 
 === Class Frequencies (All Samples) ===
   Background: 98.9981%
