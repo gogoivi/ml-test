@@ -18,6 +18,7 @@ class U_Net(nn.Module):
         self.block4_contract=double_conv(in_channels=256,out_channels=512)
         self.block5_contract=double_conv(in_channels=512,out_channels=1024)
         self.maxpool=nn.MaxPool3d(kernel_size=2,stride=2)
+        self.dropout = nn.Dropout3d(p=0.5)
 
         # Going back up
         self.upconv1=nn.ConvTranspose3d(in_channels=1024,out_channels=512,kernel_size=2,stride=2)
@@ -43,9 +44,12 @@ class U_Net(nn.Module):
         clayer2=self.block2_contract(self.maxpool(clayer1))
         clayer3=self.block3_contract(self.maxpool(clayer2))
         clayer4=self.block4_contract(self.maxpool(clayer3))
+        clayer4=self.dropout(clayer4)
 
         # Going back up (expanding layers)
-        x=self.upconv1(self.block5_contract(self.maxpool(clayer4)))
+        x=self.block5_contract(self.maxpool(clayer4))
+        x=self.dropout(x)
+        x=self.upconv1(x)
         x=torch.cat([x,clayer4],dim=1)
         x=self.block1_expand(x)
         x=self.upconv2(x)
