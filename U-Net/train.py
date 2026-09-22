@@ -1,5 +1,5 @@
 import torch
-from model import U_Net
+from model import U_Net,U_Netx2
 import torchvision
 from torchvision.transforms import ToTensor
 from tqdm import tqdm
@@ -9,6 +9,8 @@ from torch.utils.data import Dataset
 from load_data import compute_class_weights,get_dataloaders
 from torch.utils.tensorboard import SummaryWriter
 import os
+from monai.losses import DiceLoss
+from torch.amp import autocast
 
 
 def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
@@ -22,6 +24,8 @@ def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
 size=48
 epochs=100
 batch_size=20
+kernel_size=3
+U_Net_Name="U_Netx2"
 
 # Patience counter idea was claude
 best_val_loss = float('inf')
@@ -53,11 +57,17 @@ if __name__=="__main__":
     # Create dataloaders
     train_dataloader, test_dataloader = get_dataloaders(ROOT_DIR, batch_size=2)
 
-    u_net=U_Net(size=size,classes=3,color=False)
+    # u_net=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
+    u_net=U_Netx2(size=size,classes=3,color=False,kernel_size=kernel_size)
     u_net.to(device)
 
     optimizer=torch.optim.Adamax(params=u_net.parameters(),lr=0.001)
     loss_fn=nn.CrossEntropyLoss(weight=weights.to(device),ignore_index=3)  # [background, nerve,vessel]
+    dice_loss_3d = DiceLoss(
+        include_background=False,
+        to_onehot_y=True,
+        softmax=True
+    )
 
     for i in tqdm(range(epochs)):
         u_net.train()
@@ -66,8 +76,10 @@ if __name__=="__main__":
         for batch, (X,y) in enumerate(train_dataloader):
             X=X.to(device)
             y=y.to(device)
-            x_pred=u_net(X)
-            loss=loss_fn(x_pred,y)
+            with autocast(device_type=device):
+                x_pred=u_net(X)
+                loss=loss_fn(x_pred,y)
+                loss=dice_loss_3d(x_pred,y.unsqueeze(1))+0.8*loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -86,8 +98,10 @@ if __name__=="__main__":
                 for (X,y) in test_dataloader:
                     X=X.to(device)
                     y=y.to(device)
-                    x_pred=u_net(X)
-                    loss=loss_fn(x_pred,y)
+                    with autocast(device_type=device):
+                        x_pred=u_net(X)
+                        loss=loss_fn(x_pred,y)
+                        loss=dice_loss_3d(x_pred,y.unsqueeze(1))+0.8*loss
                     batch_size = X.shape[0]
                     loss_sum += loss.item() * batch_size
                     sample_count += batch_size
@@ -99,8 +113,8 @@ if __name__=="__main__":
             if val_loss<best_val_loss:
                 best_val_loss=val_loss
                 patience_counter=0
-                save_model(model=u_net,target_dir="U-Net_models",model_name=f"MRI_E{i}")
-                best_model_name=f"MRI_E{i}"
+                save_model(model=u_net,target_dir="U-Net_models",model_name=f"MRI_{U_Net_Name}_E{i}_K{kernel_size}")
+                best_model_name=f"MRI_{U_Net_Name}_E{i}_K{kernel_size}"
             else:
                 patience_counter+=1
                 if patience_counter>patience:

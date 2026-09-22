@@ -73,22 +73,21 @@ class MRIDataset(Dataset):
     def __getitem__(self, idx):
         input_path, target_path = self.samples[idx]
         
-        # Load TIFF files as numpy arrays
-        # tifffile reads as shape (D, H, W) or (H, W) for 2D
         x = tifffile.imread(input_path).astype(np.float32)
-        y = tifffile.imread(target_path).astype(np.int64)  # Labels must be long/int64
+        y = tifffile.imread(target_path).astype(np.int64)
         
-        # Normalize input to [0, 1] range (adjust if your data is different)
+        # Remap label 3 (uncertain) to 0 (background)
+        y[y == 3] = 0
+        
+        # Normalize input
         x = (x - x.min()) / (x.max() - x.min() + 1e-8)
         
-        # Add channel dimension: (D, H, W) -> (1, D, H, W)
+        # Add channel dimension
         x = np.expand_dims(x, axis=0)
         
-        # Convert to tensors
         x = torch.from_numpy(x)
         y = torch.from_numpy(y)
         
-        # Apply transforms if any (for data augmentation)
         if self.transform:
             x, y = self.transform(x, y)
         
