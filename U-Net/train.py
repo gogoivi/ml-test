@@ -11,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 import os
 from monai.losses import DiceLoss
 from torch.amp import autocast
+from loss_fn import TopologyAwareLoss
 
 
 def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
@@ -22,7 +23,7 @@ def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
 
 
 size=48
-epochs=100
+epochs=10
 batch_size=20
 kernel_size=3
 U_Net_Name="U_Net"
@@ -68,6 +69,7 @@ if __name__=="__main__":
         to_onehot_y=True,
         softmax=True
     )
+    topo_loss = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=25)
 
     for i in tqdm(range(epochs)):
         u_net.train()
@@ -79,7 +81,9 @@ if __name__=="__main__":
             with autocast(device_type=device):
                 x_pred=u_net(X)
                 loss=loss_fn(x_pred,y)
-                loss=dice_loss_3d(x_pred,y.unsqueeze(1))+0.8*loss
+                loss=(1.2*dice_loss_3d(x_pred,y.unsqueeze(1))+0.6*loss)
+                T_loss=topo_loss(x_pred, y, i, N=5)
+                loss*=T_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -101,7 +105,9 @@ if __name__=="__main__":
                     with autocast(device_type=device):
                         x_pred=u_net(X)
                         loss=loss_fn(x_pred,y)
-                        loss=1.2*dice_loss_3d(x_pred,y.unsqueeze(1))+0.6*loss
+                        loss=(1.2*dice_loss_3d(x_pred,y.unsqueeze(1))+0.6*loss)
+                        T_loss=topo_loss(x_pred, y, i, N=5)
+                        loss*=T_loss
                     batch_size = X.shape[0]
                     loss_sum += loss.item() * batch_size
                     sample_count += batch_size

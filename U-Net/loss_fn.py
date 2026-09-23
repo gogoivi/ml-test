@@ -65,15 +65,22 @@ def get_class_mask(pred_logits, class_idx):
     binary_mask = (pred_classes == class_idx)        # Boolean tensor
     return binary_mask.cpu().numpy().astype(np.uint8)
 
-def compute_total_persistence(persistence_diagram):
+def compute_total_persistence(persistence_diagram,MIN_PEN:float=1.0):
     """
     Given a persistence diagram (list of (dim, (birth, death)) tuples),
     compute sum of all finite bar lengths.
     Returns: d0 persistence, d1 persistence
     """
-    d0_persistence=np.array([item[1][1]-item[1][2] for item in persistence_diagram if item[0]==0 and item[1][1] != np.inf])
-    d1_persistence=np.array([item[1][1]-item[1][2] for item in persistence_diagram if item[0]==1 and item[1][1] != np.inf])
-    return np.sum(d0_persistence),np.sum(d1_persistence)
+    d0_persistence=np.array([item[1][1] - item[1][0] for item in persistence_diagram if item[0]==0 and item[1][1] != np.inf])
+    d1_persistence=np.array([item[1][1] - item[1][0] for item in persistence_diagram if item[0]==1 and item[1][1] != np.inf])
+    d0=np.sum(d0_persistence)
+    d1=np.sum(d1_persistence)
+    if d1<MIN_PEN:
+        d1=MIN_PEN
+    if d0<MIN_PEN:
+        d0=MIN_PEN
+
+    return d0,d1
 
 def get_class_mask_from_target(target, class_idx):
     """
@@ -90,17 +97,18 @@ class TopologyAwareLoss(nn.Module):
         self.beta=beta
         self.warmup_epochs=warmup_epochs
         
-    def forward(self, pred, target, current_epoch):
+    def forward(self, pred, target, current_epoch,N:int=1):
+        """N is amount of epochs that it skips before doing these computations"""
         d0_total=0
         d1_total=0
         d0_class1=0
         d1_class1=0
         d0_class2=0
         d1_class2=0
-        if current_epoch<=self.warmup_epochs:
+        if (current_epoch<=self.warmup_epochs) or (current_epoch%N !=0):
             return 1
         else:
-            for i in range(pred.size()):
+            for i in range(pred.shape[0]):
                 pred_points_class1 = subsample_points(get_surface_points(get_class_mask(pred[i],1)))
                 target_points_class1 = subsample_points(get_surface_points(get_class_mask_from_target(target[i],1)))
                 pred_points_class2 = subsample_points(get_surface_points(get_class_mask(pred[i],2)))
@@ -128,13 +136,13 @@ class TopologyAwareLoss(nn.Module):
 
                 if len(pred_points_class2) == 0 and len(target_points_class2) == 0: 
                     d0_class2+=0
-                    d1_class_2+=0
+                    d1_class2+=0
                 elif len(pred_points_class2) == 0 or len(target_points_class2) == 0:
                     if len(pred_points_class2) == 0:
                         target_class2_PD=compute_persistence_diagram(target_points_class2)
                         d0,d1=compute_total_persistence(target_class2_PD)
                     else: 
-                        pred_class1_PD=compute_persistence_diagram(pred_points_class2)
+                        pred_class2_PD=compute_persistence_diagram(pred_points_class2)
                         d0,d1=compute_total_persistence(pred_class2_PD)
                     d0_class2+=d0
                     d1_class2+=d1
@@ -142,11 +150,9 @@ class TopologyAwareLoss(nn.Module):
                     # Nothing empty so compute wasserstein distance
                     pred_class2_PD=compute_persistence_diagram(pred_points_class2)
                     target_class2_PD=compute_persistence_diagram(target_points_class2)
-
-                
                     d0_class2,d1_class2=compute_wasserstein_distance(pred_class2_PD,target_class2_PD)
 
                 d0_total+=(d0_class1+d0_class2)/2
                 d1_total+=(d1_class1+d1_class2)/2
 
-            return 1+self.alpha*(d0_total/pred.size())+self.beta*(d1_total/pred.size())
+            return 1+self.alpha*(d0_total/pred.shape[0])+self.beta*(d1_total/pred.shape[0])
