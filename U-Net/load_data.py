@@ -5,39 +5,54 @@ import os
 import torch
 from torch.utils.data import Dataset, DataLoader
 import tifffile
+import nibabel as nib
 import numpy as np
 
 class MRIDataset(Dataset):
     """
-    Loads 3D TIFF volumes and their segmentation masks.
-    Combines ipsilateral and contralateral data into one dataset.
+    Loads 3D TIFF and NIfTI volumes and their segmentation masks.
+    Combines multiple data sources into one dataset.
     """
     def __init__(self, root_dir, transform=None):
         """
         Args:
-            root_dir: Parent folder containing the 4 subfolders
-            transform: Optional transforms to apply (for data augmentation later)
+            root_dir: Parent folder containing all subfolders
+            transform: Optional transforms to apply
         """
         self.root_dir = root_dir
         self.transform = transform
         
-        # Build list of (input_path, target_path) pairs
+        # Build list of (input_path, target_path, file_type) tuples
         self.samples = []
         
-        # Add ipsilateral samples
+        # === TIFF DATA (Original 2023 Patients) ===
+        
+        # Add ipsilateral TIFF samples
         ipsi_input_dir = os.path.join(root_dir, "2023_Ipsilateral Input")
         ipsi_target_dir = os.path.join(root_dir, "2023_Ipsilateral Target")
-        self._add_samples(ipsi_input_dir, ipsi_target_dir)
+        self._add_tiff_samples(ipsi_input_dir, ipsi_target_dir)
         
-        # Add contralateral samples
+        # Add contralateral TIFF samples
         contra_input_dir = os.path.join(root_dir, "2023_Contralateral Input")
         contra_target_dir = os.path.join(root_dir, "2023_Contralateral Target")
-        self._add_samples(contra_input_dir, contra_target_dir)
+        self._add_tiff_samples(contra_input_dir, contra_target_dir)
+        
+        # === NIfTI DATA (OpenNeuro) ===
+        
+        # Add left-sided NIfTI samples
+        nifti_input_left = os.path.join(root_dir, "OpenNeuro Cropped MRI L-sided NIfTI")
+        nifti_target_left = os.path.join(root_dir, "OpenNeuro Manual Segmentations L-sided NIfTI")
+        self._add_nifti_samples(nifti_input_left, nifti_target_left, side='left')
+        
+        # Add right-sided NIfTI samples
+        nifti_input_right = os.path.join(root_dir, "OpenNeuro Cropped MRI R-sided NIfTI")
+        nifti_target_right = os.path.join(root_dir, "OpenNeuro Manual Segmentations R-sided NIfTI")
+        self._add_nifti_samples(nifti_input_right, nifti_target_right, side='right')
         
         print(f"Loaded {len(self.samples)} total samples")
     
-    def _add_samples(self, input_dir, target_dir):
-        """Match input and target files by MRN number."""
+    def _add_tiff_samples(self, input_dir, target_dir):
+        """Match TIFF input and target files by MRN number (starting from targets)."""
         if not os.path.exists(input_dir) or not os.path.exists(target_dir):
             print(f"Warning: Directory not found - {input_dir} or {target_dir}")
             return
@@ -45,46 +60,87 @@ class MRIDataset(Dataset):
         input_files = sorted(os.listdir(input_dir))
         target_files = sorted(os.listdir(target_dir))
         
-        for input_file in input_files:
-            if not input_file.endswith(('.tif', '.tiff')):
+        # Start from TARGETS (the limiting factor)
+        for target_file in target_files:
+            if not target_file.endswith(('.tif', '.tiff')):
                 continue
             
-            # Extract MRN number (everything before _cropped)
-            mrn = input_file.replace('_cropped.tiff', '').replace('_cropped.tif', '')
+            # Extract MRN number (everything before _mask)
+            mrn = target_file.replace('_mask.tiff', '').replace('_mask.tif', '')
             
-            # Look for matching target file with _mask suffix
-            target_file = f"{mrn}_mask.tiff"
-            target_file_alt = f"{mrn}_mask.tif"  # In case extension differs
+            # Look for matching input file with _cropped suffix
+            input_file = f"{mrn}_cropped.tiff"
+            input_file_alt = f"{mrn}_cropped.tif"
             
-            if target_file in target_files:
+            if input_file in input_files:
                 input_path = os.path.join(input_dir, input_file)
                 target_path = os.path.join(target_dir, target_file)
-                self.samples.append((input_path, target_path))
-            elif target_file_alt in target_files:
-                input_path = os.path.join(input_dir, input_file)
-                target_path = os.path.join(target_dir, target_file_alt)
-                self.samples.append((input_path, target_path))
-            # else:
-            #     print(f"Warning: No matching target for {input_file}")
+                self.samples.append((input_path, target_path, 'tiff'))
+            elif input_file_alt in input_files:
+                input_path = os.path.join(input_dir, input_file_alt)
+                target_path = os.path.join(target_dir, target_file)
+                self.samples.append((input_path, target_path, 'tiff'))
+    
+    def _add_nifti_samples(self, input_dir, target_dir, side):
+        """Match NIfTI input and target files (starting from targets)."""
+        if not os.path.exists(input_dir) or not os.path.exists(target_dir):
+            print(f"Warning: NIfTI directory not found - {input_dir} or {target_dir}")
+            return
+        
+        input_files = sorted(os.listdir(input_dir))
+        target_files = sorted(os.listdir(target_dir))
+        
+        # Start from TARGETS (the limiting factor)
+        for target_file in target_files:
+            if not target_file.endswith('.nii.gz'):
+                continue
+            
+            # Extract subject number from target: "10_left_manual.nii.gz" -> "10"
+            # Format: {number}_{side}_manual.nii.gz
+            parts = target_file.replace('.nii.gz', '').split('_')
+            if len(parts) >= 3 and parts[-1] == 'manual':
+                subject_num = parts[0]
+                
+                # Look for matching input: "{number}_cropped_{side}.nii.gz"
+                input_file = f"{subject_num}_cropped_{side}.nii.gz"
+                
+                if input_file in input_files:
+                    input_path = os.path.join(input_dir, input_file)
+                    target_path = os.path.join(target_dir, target_file)
+                    self.samples.append((input_path, target_path, 'nifti'))
+                else:
+                    print(f"Warning: No matching input for {target_file}")
+    
+    def _load_volume(self, path, file_type):
+        """Load a 3D volume from either TIFF or NIfTI format."""
+        if file_type == 'tiff':
+            return tifffile.imread(path)
+        elif file_type == 'nifti':
+            nii = nib.load(path)
+            return nii.get_fdata()
+        else:
+            raise ValueError(f"Unknown file type: {file_type}")
     
     def __len__(self):
         return len(self.samples)
     
     def __getitem__(self, idx):
-        input_path, target_path = self.samples[idx]
+        input_path, target_path, file_type = self.samples[idx]
         
-        x = tifffile.imread(input_path).astype(np.float32)
-        y = tifffile.imread(target_path).astype(np.int64)
+        # Load volumes
+        x = self._load_volume(input_path, file_type).astype(np.float32)
+        y = self._load_volume(target_path, file_type).astype(np.int64)
         
         # Remap label 3 (uncertain) to 0 (background)
         y[y == 3] = 0
         
-        # Normalize input
+        # Normalize input to [0, 1]
         x = (x - x.min()) / (x.max() - x.min() + 1e-8)
         
-        # Add channel dimension
+        # Add channel dimension: (D, H, W) -> (1, D, H, W)
         x = np.expand_dims(x, axis=0)
         
+        # Convert to tensors
         x = torch.from_numpy(x)
         y = torch.from_numpy(y)
         
@@ -94,23 +150,10 @@ class MRIDataset(Dataset):
         return x, y
 
 
-def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0,transform=None):
-    """
-    Creates train and test dataloaders.
+def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None):
+    """Creates train and test dataloaders."""
+    full_dataset = MRIDataset(root_dir, transform=transform)
     
-    Args:
-        root_dir: Parent folder containing the 4 subfolders
-        batch_size: Batch size (keep small for 3D volumes - memory intensive!)
-        train_split: Fraction of data for training
-        num_workers: Parallel data loading workers (0 for Windows compatibility)
-    
-    Returns:
-        train_loader, test_loader
-    """
-    # Create full dataset
-    full_dataset = MRIDataset(root_dir,transform=transform)
-    
-    # Split into train/test
     total_samples = len(full_dataset)
     train_size = int(train_split * total_samples)
     test_size = total_samples - train_size
@@ -121,7 +164,6 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0,trans
     
     print(f"Train samples: {train_size}, Test samples: {test_size}")
     
-    # Create dataloaders
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
@@ -139,18 +181,47 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0,trans
     return train_loader, test_loader
 
 
+def compute_class_weights(root_dir, num_classes=3, dampen=0.5):
+    """Compute class weights based on frequency across ALL samples."""
+    dataset = MRIDataset(root_dir)
+    
+    class_counts = torch.zeros(num_classes)
+    
+    print("Computing class frequencies across all samples...")
+    for i in range(len(dataset)):
+        _, y = dataset[i]
+        for c in range(num_classes):
+            class_counts[c] += (y == c).sum().item()
+        
+        if (i + 1) % 10 == 0:
+            print(f"  Processed {i + 1}/{len(dataset)} samples")
+    
+    total_voxels = class_counts.sum()
+    frequencies = class_counts / total_voxels
+    
+    print(f"\n=== Class Frequencies (All Samples) ===")
+    class_names = ['Background', 'Nerve', 'Vessel']
+    for c in range(num_classes):
+        print(f"  {class_names[c]}: {frequencies[c]*100:.4f}%")
+    
+    weights = 1.0 / (frequencies + 1e-8)
+    weights = weights ** dampen
+    weights = weights / weights.sum() * num_classes
+    
+    print(f"\n=== Class Weights ===")
+    print(f"  Tensor: {weights}")
+    
+    return weights
+
+
 def inspect_data(root_dir):
-    """
-    Utility function to check your data before training.
-    Run this first to verify everything loads correctly!
-    """
+    """Check your data before training."""
     dataset = MRIDataset(root_dir)
     
     if len(dataset) == 0:
         print("ERROR: No samples found!")
-        return
+        return None, None
     
-    # Load first sample
     x, y = dataset[0]
     
     print(f"\n=== Data Inspection ===")
@@ -161,53 +232,38 @@ def inspect_data(root_dir):
     print(f"Target dtype: {y.dtype}")
     print(f"Unique labels in target: {torch.unique(y).tolist()}")
     
-    # Count class frequencies (useful for setting weights)
-    total_voxels = y.numel()
-    print(f"\nClass frequencies:")
-    for label in torch.unique(y):
-        count = (y == label).sum().item()
-        percentage = 100 * count / total_voxels
-        print(f"  Class {label}: {percentage:.2f}%")
-    
     return x, y
 
-def compute_class_weights(root_dir, num_classes=3,dampen=0.5):
-    """
-    Compute class weights based on frequency across ALL samples.
-    Returns weights inversely proportional to class frequency.
-    """
+
+def check_all_labels(root_dir, num_classes=3):
+    """Find any files with unexpected label values."""
     dataset = MRIDataset(root_dir)
     
-    # Count total voxels per class
-    class_counts = torch.zeros(num_classes)
+    print("Checking all target files for invalid labels...")
+    print(f"Expected labels: 0 to {num_classes - 1}\n")
     
-    print("Computing class frequencies across all samples...")
+    problem_files = []
+    
     for i in range(len(dataset)):
-        _, y = dataset[i]
-        for c in range(num_classes):
-            class_counts[c] += (y == c).sum().item()
+        input_path, target_path, file_type = dataset.samples[i]
+        y = dataset._load_volume(target_path, file_type)
+        unique_labels = np.unique(y)
         
-        # Progress indicator
-        if (i + 1) % 10 == 0:
-            print(f"  Processed {i + 1}/{len(dataset)} samples")
+        invalid = [l for l in unique_labels if l < 0 or l >= num_classes]
+        
+        if invalid:
+            filename = os.path.basename(target_path)
+            print(f"PROBLEM: {filename}")
+            print(f"  Found labels: {unique_labels.tolist()}")
+            print(f"  Invalid: {invalid}")
+            problem_files.append(target_path)
     
-    # Compute frequencies
-    total_voxels = class_counts.sum()
-    frequencies = class_counts / total_voxels
+    if not problem_files:
+        print("All files OK!")
+    else:
+        print(f"\n{len(problem_files)} files have invalid labels.")
     
-    print(f"\n=== Class Frequencies (All Samples) ===")
-    class_names = ['Background', 'Nerve', 'Vessel']
-    for c in range(num_classes):
-        print(f"  {class_names[c]}: {frequencies[c]*100:.4f}%")
-    
-    # Use dampened version:
-    weights = 1.0 / (frequencies + 1e-8)
-    weights = weights ** dampen  # <-- Add this line
-    
-    # Normalize
-    weights = weights / weights.sum() * num_classes
-    
-    return weights
+    return problem_files
 
 def visualize_slice(x, y, slice_idx=None, pred=None):
     """
@@ -291,36 +347,6 @@ def visualize_prediction_3d(x, y_true, y_pred, threshold=0.5):
     
     napari.run()
 
-def check_all_labels(root_dir):
-    """Find any target files with unexpected label values."""
-    dataset = MRIDataset(root_dir)
-    
-    print("Checking all target files for invalid labels...")
-    print("Expected labels: 0, 1, 2\n")
-    
-    problem_files = []
-    
-    for i in range(len(dataset)):
-        input_path, target_path = dataset.samples[i]
-        y = tifffile.imread(target_path)
-        unique_labels = np.unique(y)
-        
-        # Check for any label outside [0, 1, 2]
-        invalid = [l for l in unique_labels if l < 0 or l > 2]
-        
-        if invalid:
-            filename = os.path.basename(target_path)
-            print(f"PROBLEM: {filename}")
-            print(f"  Found labels: {unique_labels.tolist()}")
-            print(f"  Invalid: {invalid}")
-            problem_files.append(target_path)
-    
-    if not problem_files:
-        print("All files OK!")
-    else:
-        print(f"\n{len(problem_files)} files have invalid labels.")
-    
-    return problem_files
 
 def evaluate_and_visualize(model, test_loader, device, num_samples=3):
     """
@@ -363,21 +389,13 @@ def evaluate_and_visualize(model, test_loader, device, num_samples=3):
 
 # Run this to test your data loading
 if __name__ == "__main__":
-    # Change this to your actual data path
     ROOT_DIR = r"C:\Users\gogoi\Desktop\ml-test\2023 Patients"
-
-    check_all_labels(ROOT_DIR)
     
-    # First, inspect the data
+    check_all_labels(ROOT_DIR)
     x, y = inspect_data(ROOT_DIR)
     
-    # Visualize a slice
-    visualize_slice(x, y)
-    
-    # Test dataloader creation
     train_loader, test_loader = get_dataloaders(ROOT_DIR, batch_size=2)
     
-    # Test loading a batch
     for X_batch, y_batch in train_loader:
         print(f"\nBatch shapes: X={X_batch.shape}, y={y_batch.shape}")
         break

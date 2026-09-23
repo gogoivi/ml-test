@@ -25,11 +25,11 @@ size=48
 epochs=100
 batch_size=20
 kernel_size=3
-U_Net_Name="U_Netx2"
+U_Net_Name="U_Net"
 
 # Patience counter idea was claude
 best_val_loss = float('inf')
-patience = 5  # Stop if no improvement for 5 eval cycles (15 epochs)
+patience = 7  # Stop if no improvement for 7 eval cycles (21 epochs)
 patience_counter = 0
 best_model_name=""
 target_dir = "U-Net_models"
@@ -57,8 +57,8 @@ if __name__=="__main__":
     # Create dataloaders
     train_dataloader, test_dataloader = get_dataloaders(ROOT_DIR, batch_size=2)
 
-    # u_net=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
-    u_net=U_Netx2(size=size,classes=3,color=False,kernel_size=kernel_size)
+    u_net=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
+    # u_net=U_Netx2(size=size,classes=3,color=False,kernel_size=kernel_size)
     u_net.to(device)
 
     optimizer=torch.optim.Adamax(params=u_net.parameters(),lr=0.001)
@@ -101,7 +101,7 @@ if __name__=="__main__":
                     with autocast(device_type=device):
                         x_pred=u_net(X)
                         loss=loss_fn(x_pred,y)
-                        loss=dice_loss_3d(x_pred,y.unsqueeze(1))+0.8*loss
+                        loss=1.2*dice_loss_3d(x_pred,y.unsqueeze(1))+0.6*loss
                     batch_size = X.shape[0]
                     loss_sum += loss.item() * batch_size
                     sample_count += batch_size
