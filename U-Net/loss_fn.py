@@ -6,6 +6,9 @@ import gudhi
 import numpy as np
 from torch import nn
 import torch
+from gudhi.wasserstein import wasserstein_distance
+from gudhi.sklearn import RipsPersistence
+from joblib import Parallel, delayed
 
 def get_surface_points(binary_mask):
     """
@@ -34,7 +37,7 @@ def compute_persistence_diagram(points, max_dimension=1,size:int=20):
     
     return simplex_tree.persistence()
 
-def subsample_points(points, max_points=1000):
+def subsample_points(points, max_points=200):
     """
     points: (N, 3) array of surface coordinates
     max_points: maximum number of points to keep
@@ -46,13 +49,29 @@ def subsample_points(points, max_points=1000):
     indices = np.random.choice(len(points), max_points, replace=False)
     return points[indices]
 
-def compute_wasserstein_distance(X:list[tuple[int, tuple[float, float]]],Y:list[tuple[int, tuple[float, float]]]):
-    dim0_X=np.array([item[1] for item in X if item[0]==0 and item[1][1] != np.inf])
-    dim1_X=np.array([item[1] for item in X if item[0]==1 and item[1][1] != np.inf])
-    dim0_Y=np.array([item[1] for item in Y if item[0]==0 and item[1][1] != np.inf])
-    dim1_Y=np.array([item[1] for item in Y if item[0]==1 and item[1][1] != np.inf])
-    dim0_dist=gudhi.wasserstein.wasserstein_distance(dim0_X,dim0_Y)
-    dim1_dist=gudhi.wasserstein.wasserstein_distance(dim1_X,dim1_Y)
+def compute_wasserstein_distance(X,Y):
+    # dim0_X=np.array([item[1] for item in X if item[0]==0 and item[1][1] != np.inf])
+    dim0_X=X[0]
+    dim0_X=dim0_X[dim0_X[:,1] != np.inf]
+    # dim1_X=np.array([item[1] for item in X if item[0]==1 and item[1][1] != np.inf])
+    # dim0_Y=np.array([item[1] for item in Y if item[0]==0 and item[1][1] != np.inf])
+    # dim1_Y=np.array([item[1] for item in Y if item[0]==1 and item[1][1] != np.inf])
+    dim1_X=X[1]
+    dim1_X=dim1_X[dim1_X[:,1] != np.inf]
+    dim0_Y=Y[0]
+    dim0_Y=dim0_Y[dim0_Y[:,1] != np.inf]
+    dim1_Y=Y[1]
+    dim1_Y=dim1_Y[dim1_Y[:,1] != np.inf]
+    if len(dim0_X) == 0:
+        dim0_X = np.empty((0, 2))
+    if len(dim1_X) == 0:
+        dim1_X = np.empty((0, 2))
+    if len(dim0_Y) == 0:
+        dim0_Y = np.empty((0, 2))
+    if len(dim1_Y) == 0:
+        dim1_Y = np.empty((0, 2))
+    dim0_dist=wasserstein_distance(dim0_X,dim0_Y)
+    dim1_dist=wasserstein_distance(dim1_X,dim1_Y)
     return dim0_dist, dim1_dist
 
 def get_class_mask(pred_logits, class_idx):
@@ -71,8 +90,10 @@ def compute_total_persistence(persistence_diagram,MIN_PEN:float=1.0):
     compute sum of all finite bar lengths.
     Returns: d0 persistence, d1 persistence
     """
-    d0_persistence=np.array([item[1][1] - item[1][0] for item in persistence_diagram if item[0]==0 and item[1][1] != np.inf])
-    d1_persistence=np.array([item[1][1] - item[1][0] for item in persistence_diagram if item[0]==1 and item[1][1] != np.inf])
+    d0_filtered=persistence_diagram[0][persistence_diagram[0][:,1]!= np.inf]
+    d1_filtered=persistence_diagram[1][persistence_diagram[1][:,1]!= np.inf]
+    d0_persistence = d0_filtered[:, 1] - d0_filtered[:, 0]
+    d1_persistence = d1_filtered[:, 1] - d1_filtered[:, 0]
     d0=np.sum(d0_persistence)
     d1=np.sum(d1_persistence)
     if d1<MIN_PEN:
@@ -90,69 +111,93 @@ def get_class_mask_from_target(target, class_idx):
     return binary_mask.cpu().numpy().astype(np.uint8)
 
 class TopologyAwareLoss(nn.Module):
-    def __init__(self, alpha, beta, warmup_epochs:int=25):
+    def __init__(self, alpha, beta, warmup_epochs:int=25,classes_wo_background:int=2):
         super().__init__()
         """Assuming class 1 is background iteratinfg through 1 and 2"""
         self.alpha=alpha
         self.beta=beta
         self.warmup_epochs=warmup_epochs
+        self.classes=classes_wo_background
         
     def forward(self, pred, target, current_epoch,N:int=1):
-        """N is amount of epochs that it skips before doing these computations"""
+
         d0_total=0
         d1_total=0
-        d0_class1=0
-        d1_class1=0
-        d0_class2=0
-        d1_class2=0
+
         if (current_epoch<=self.warmup_epochs) or (current_epoch%N !=0):
             return 1
-        else:
+        
+        # # Parallel processing of all samples
+        # results = Parallel(n_jobs=4)(
+        #     delayed(process_single_sample)(pred[i], target[i])
+        #     for i in range(pred.shape[0])
+        # )
+        
+        # # Aggregate results
+        # d0_total = sum((r[0] + r[2]) / 2 for r in results)
+        # d1_total = sum((r[1] + r[3]) / 2 for r in results)
+
+        for j in range(self.classes):
+            surfaces = []
+            metadata = []  # Track: (sample_idx, is_pred, is_empty)
+
             for i in range(pred.shape[0]):
-                pred_points_class1 = subsample_points(get_surface_points(get_class_mask(pred[i],1)))
-                target_points_class1 = subsample_points(get_surface_points(get_class_mask_from_target(target[i],1)))
-                pred_points_class2 = subsample_points(get_surface_points(get_class_mask(pred[i],2)))
-                target_points_class2 = subsample_points(get_surface_points(get_class_mask_from_target(target[i],2)))
+                pred_surface = get_surface_points(get_class_mask(pred[i], j+1))
+                target_surface = get_surface_points(get_class_mask_from_target(target[i], j+1))
 
-                # If nothing is predicted and nothing exists for class1 (got it right)
-                if len(pred_points_class1) == 0 and len(target_points_class1) == 0: 
-                    d0_class1+=0
-                    d1_class1+=0
-                # If nothing is predicted or nothing exists for class1 (bad - predicted when nothing was there or didnt predict when something was there)
-                elif len(pred_points_class1) == 0 or len(target_points_class1) == 0:
-                    if len(pred_points_class1) == 0:
-                        target_class1_PD=compute_persistence_diagram(target_points_class1)
-                        d0,d1=compute_total_persistence(target_class1_PD)
-                    else: 
-                        pred_class1_PD=compute_persistence_diagram(pred_points_class1)
-                        d0,d1=compute_total_persistence(pred_class1_PD)    
-                    d0_class1+=d0
-                    d1_class1+=d1
-
+                if len(pred_surface)!=0:
+                    surfaces.append(subsample_points(pred_surface, max_points=200))
+                    metadata.append((i,1,0))
                 else:
-                    pred_class1_PD=compute_persistence_diagram(pred_points_class1)
-                    target_class1_PD=compute_persistence_diagram(target_points_class1)
-                    d0_class1,d1_class1=compute_wasserstein_distance(pred_class1_PD,target_class1_PD)
+                    metadata.append((i,1,1))
 
-                if len(pred_points_class2) == 0 and len(target_points_class2) == 0: 
-                    d0_class2+=0
-                    d1_class2+=0
-                elif len(pred_points_class2) == 0 or len(target_points_class2) == 0:
-                    if len(pred_points_class2) == 0:
-                        target_class2_PD=compute_persistence_diagram(target_points_class2)
-                        d0,d1=compute_total_persistence(target_class2_PD)
-                    else: 
-                        pred_class2_PD=compute_persistence_diagram(pred_points_class2)
-                        d0,d1=compute_total_persistence(pred_class2_PD)
-                    d0_class2+=d0
-                    d1_class2+=d1
+                if len(target_surface) !=0:
+                    surfaces.append(subsample_points(target_surface, max_points=200))
+                    metadata.append((i,0,0))
                 else:
-                    # Nothing empty so compute wasserstein distance
-                    pred_class2_PD=compute_persistence_diagram(pred_points_class2)
-                    target_class2_PD=compute_persistence_diagram(target_points_class2)
-                    d0_class2,d1_class2=compute_wasserstein_distance(pred_class2_PD,target_class2_PD)
+                    metadata.append((i,0,1))
 
-                d0_total+=(d0_class1+d0_class2)/2
-                d1_total+=(d1_class1+d1_class2)/2
+            if len(surfaces) == 0:
+                continue  # Skip to next class, add nothing to d0_total/d1_total
 
-            return 1+self.alpha*(d0_total/pred.shape[0])+self.beta*(d1_total/pred.shape[0])
+            metadata_non_empty=[items for items in metadata if items[2]==0]
+            rp = RipsPersistence(homology_dimensions=[0, 1], threshold=20, n_jobs=-1)
+            all_diagrams = rp.fit_transform(surfaces)
+
+            # Create lookup arrays - one slot per sample
+            pred_diagrams = [None] * pred.shape[0]
+            target_diagrams = [None] * pred.shape[0]
+
+            # Fill in using metadata_non_empty (which aligns with all_diagrams)
+            for k, (sample_idx, is_pred, is_empty) in enumerate(metadata_non_empty):
+                if is_pred == 1:
+                    pred_diagrams[sample_idx] = all_diagrams[k]
+                else:
+                    target_diagrams[sample_idx] = all_diagrams[k]
+
+            for i in range(pred.shape[0]):
+                pred_diag = pred_diagrams[i]
+                target_diag = target_diagrams[i]
+                
+                if pred_diag is not None and target_diag is not None:
+                    d0,d1=compute_wasserstein_distance(pred_diag,target_diag)
+                    pass
+                elif pred_diag is not None:
+                    d0,d1=compute_total_persistence(pred_diag)
+                    pass
+                elif target_diag is not None:
+                    d0,d1=compute_total_persistence(target_diag)
+                    pass
+                else:
+                    d0,d1=0,0
+                    pass
+                d0_total+=d0
+                d1_total+=d1
+
+        if np.isinf(d0_total) or np.isinf(d1_total):
+            print("WARNING: Infinity detected!")
+        if self.omega > 100:
+            print("WARNING: omega very large!")
+
+        return 1 + self.alpha * (d0_total / pred.shape[0]*2) + self.beta * (d1_total / pred.shape[0]*2)
+

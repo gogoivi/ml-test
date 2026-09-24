@@ -23,10 +23,13 @@ def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
 
 
 size=48
-epochs=10
+epochs=100
 batch_size=20
 kernel_size=3
-U_Net_Name="U_Net"
+U_Net_Name="U_Net(Topo_Loss)"
+warmup_epochs=25
+# How many to skip before topo loss starts
+N=2
 
 # Patience counter idea was claude
 best_val_loss = float('inf')
@@ -69,7 +72,7 @@ if __name__=="__main__":
         to_onehot_y=True,
         softmax=True
     )
-    topo_loss = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=25)
+    topo_loss = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
 
     for i in tqdm(range(epochs)):
         u_net.train()
@@ -82,7 +85,7 @@ if __name__=="__main__":
                 x_pred=u_net(X)
                 loss=loss_fn(x_pred,y)
                 loss=(1.2*dice_loss_3d(x_pred,y.unsqueeze(1))+0.6*loss)
-                T_loss=topo_loss(x_pred, y, i, N=5)
+                T_loss=topo_loss(x_pred, y, i, N=N)
                 loss*=T_loss
             optimizer.zero_grad()
             loss.backward()
@@ -94,7 +97,7 @@ if __name__=="__main__":
 
             
 
-        if i%3==0:
+        if i%3==0 & i>warmup_epochs:
             u_net.eval()
             with torch.no_grad():
                 sample_count = 0
@@ -106,8 +109,6 @@ if __name__=="__main__":
                         x_pred=u_net(X)
                         loss=loss_fn(x_pred,y)
                         loss=(1.2*dice_loss_3d(x_pred,y.unsqueeze(1))+0.6*loss)
-                        T_loss=topo_loss(x_pred, y, i, N=5)
-                        loss*=T_loss
                     batch_size = X.shape[0]
                     loss_sum += loss.item() * batch_size
                     sample_count += batch_size
