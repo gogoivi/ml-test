@@ -14,7 +14,7 @@ from torch.amp import autocast
 from loss_fn import TopologyAwareLoss
 import numpy as np
 from torch.amp import autocast, GradScaler
-
+from datetime import datetime
 
 
 
@@ -32,6 +32,8 @@ batch_size=20
 kernel_size=3
 U_Net_Name="U_Net(Topo_Loss)"
 warmup_epochs=10
+lr=0.0005
+timestamp = datetime.now().strftime("%m%d_%H%M")
 # How many to skip before topo loss starts
 N=2
 
@@ -46,7 +48,8 @@ target_dir = "U-Net_models"
 if __name__=="__main__":
     scaler = GradScaler()
     # Create writer (logs to ./runs folder)
-    writer = SummaryWriter()
+    run_name = f"runs/{timestamp}_{U_Net_Name}_lr{lr}_bs{batch_size}"
+    writer = SummaryWriter(log_dir=run_name)
 
     ROOT_DIR = r"C:\Users\gogoi\Desktop\ml-test\2023 Patients"
     # Setup random seed
@@ -70,7 +73,7 @@ if __name__=="__main__":
     # u_net=U_Netx2(size=size,classes=3,color=False,kernel_size=kernel_size)
     u_net.to(device)
 
-    optimizer=torch.optim.Adamax(params=u_net.parameters(),lr=0.0005,weight_decay=1e-5)
+    optimizer=torch.optim.Adamax(params=u_net.parameters(),lr=lr,weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5
     )
