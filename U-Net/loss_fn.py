@@ -193,11 +193,11 @@ class TopologyAwareLoss(nn.Module):
                     pass
                 d0_total+=d0
                 d1_total+=d1
-
+        omega = 1 + self.alpha * (d0_total / pred.shape[0]*2) + self.beta * (d1_total / pred.shape[0]*2)
         if np.isinf(d0_total) or np.isinf(d1_total):
             print("WARNING: Infinity detected!")
-        if self.omega > 100:
+        if omega > 100:
             print("WARNING: omega very large!")
 
-        return 1 + self.alpha * (d0_total / pred.shape[0]*2) + self.beta * (d1_total / pred.shape[0]*2)
+        return omega
 

@@ -13,14 +13,34 @@ class MRIDataset(Dataset):
     Loads 3D TIFF and NIfTI volumes and their segmentation masks.
     Combines multiple data sources into one dataset.
     """
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, transform=None, augment=False):
         """
         Args:
             root_dir: Parent folder containing all subfolders
             transform: Optional transforms to apply
+            augment: Whether to apply data augmentation
         """
         self.root_dir = root_dir
         self.transform = transform
+        self.augment = augment
+        
+        # Augmentation pipeline
+        if augment:
+            from monai.transforms import (
+                Compose,
+                RandFlipd,
+                RandRotate90d,
+                RandGaussianNoised,
+                RandAdjustContrastd,
+            )
+            self.aug_transforms = Compose([
+                RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+                RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+                RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+                RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(0, 1)),
+                RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
+                RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.8, 1.2)),
+            ])
         
         # Build list of (input_path, target_path, file_type) tuples
         self.samples = []
@@ -144,6 +164,13 @@ class MRIDataset(Dataset):
         x = torch.from_numpy(x)
         y = torch.from_numpy(y)
         
+        # Apply augmentation
+        if self.augment:
+            data = {"image": x, "label": y.unsqueeze(0).float()}
+            data = self.aug_transforms(data)
+            x = data["image"]
+            y = data["label"].squeeze(0).long()
+        
         if self.transform:
             x, y = self.transform(x, y)
         
@@ -152,17 +179,29 @@ class MRIDataset(Dataset):
 
 def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None):
     """Creates train and test dataloaders."""
-    full_dataset = MRIDataset(root_dir, transform=transform)
+    # Create dataset WITHOUT augmentation first (for splitting)
+    full_dataset = MRIDataset(root_dir, transform=transform, augment=False)
     
     total_samples = len(full_dataset)
     train_size = int(train_split * total_samples)
     test_size = total_samples - train_size
     
-    train_dataset, test_dataset = torch.utils.data.random_split(
-        full_dataset, [train_size, test_size]
-    )
+    # Get indices for split
+    indices = list(range(total_samples))
+    np.random.seed(42)  # Reproducible split
+    np.random.shuffle(indices)
+    train_indices = indices[:train_size]
+    test_indices = indices[train_size:]
     
-    print(f"Train samples: {train_size}, Test samples: {test_size}")
+    # Create separate datasets with/without augmentation
+    train_dataset = MRIDataset(root_dir, transform=transform, augment=True)
+    test_dataset = MRIDataset(root_dir, transform=transform, augment=False)
+    
+    # Use Subset to apply the split
+    train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
+    test_dataset = torch.utils.data.Subset(test_dataset, test_indices)
+    
+    print(f"Train samples: {len(train_indices)}, Test samples: {len(test_indices)}")
     
     train_loader = DataLoader(
         train_dataset, 

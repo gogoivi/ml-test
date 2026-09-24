@@ -77,9 +77,9 @@ def double_conv(in_channels,out_channels,kernel_size=3):
             nn.ReLU(),
         )
 
-class U_Netx2(U_Net):
+class U_Netx2(nn.Module):
     def __init__(self, size, classes, color = True, kernel_size=3):
-        super().__init__(size, classes, color, kernel_size)
+        super().__init__()
         self.Unet1=U_Net(size=size,classes=classes,color=color,kernel_size=kernel_size)
         self.Unet2=U_Net(size=size,classes=classes,color=color,kernel_size=kernel_size)
         self.comblayer=nn.Conv3d(in_channels=classes*2,out_channels=classes,kernel_size=1,stride=1)
