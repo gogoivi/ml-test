@@ -15,7 +15,7 @@ from loss_fn import TopologyAwareLoss
 import numpy as np
 from torch.amp import autocast, GradScaler
 from datetime import datetime
-
+from monai.networks.nets import SegResNet
 
 
 def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
@@ -27,7 +27,7 @@ def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
 
 
 size=48
-epochs=100
+epochs=120
 batch_size=20
 kernel_size=3
 U_Net_Name="U_Net(Topo_Loss)"
@@ -39,7 +39,7 @@ N=2
 
 # Patience counter idea was claude
 best_val_loss = float('inf')
-patience = 7  # Stop if no improvement for 7 eval cycles (21 epochs)
+patience = 9  # Stop if no improvement for 9 eval cycles (27 epochs)
 patience_counter = 0
 best_model_name=""
 target_dir = "U-Net_models"
@@ -71,6 +71,14 @@ if __name__=="__main__":
 
     u_net=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
     # u_net=U_Netx2(size=size,classes=3,color=False,kernel_size=kernel_size)
+    # u_net = SegResNet(
+    #     spatial_dims=3,
+    #     in_channels=1,
+    #     out_channels=3,
+    #     init_filters=32,
+    #     blocks_down=(1, 2, 2, 4),
+    #     blocks_up=(1, 1, 1),
+    # ).to(device)
     u_net.to(device)
 
     optimizer=torch.optim.Adamax(params=u_net.parameters(),lr=lr,weight_decay=1e-5)
