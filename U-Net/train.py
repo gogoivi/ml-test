@@ -16,6 +16,7 @@ import numpy as np
 from torch.amp import autocast, GradScaler
 from datetime import datetime
 from monai.networks.nets import SegResNet
+from modified_cldice_3d import soft_cldice_loss
 
 
 def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
@@ -30,7 +31,7 @@ size=48
 epochs=120
 batch_size=20
 kernel_size=3
-U_Net_Name="U_Net(Topo_Loss)"
+U_Net_Name="U_Net(Topo_Loss_clDice)"
 warmup_epochs=10
 lr=0.0005
 timestamp = datetime.now().strftime("%m%d_%H%M")
@@ -105,7 +106,7 @@ if __name__=="__main__":
             with autocast(device_type=device):
                 x_pred=u_net(X)
                 ce_loss=loss_fn(x_pred,y)
-                dice_loss=dice_loss_3d(x_pred,y.unsqueeze(1))
+                dice_loss=dice_loss_3d(x_pred,y.unsqueeze(1))+soft_cldice_loss(x_pred,y)
             T_loss=topo_loss(x_pred, y, i, N=N)
 
             # Check for problems BEFORE they become NaN
@@ -153,7 +154,7 @@ if __name__=="__main__":
                     with autocast(device_type=device):
                         x_pred=u_net(X)
                         ce_loss=loss_fn(x_pred,y)
-                        dice_loss=dice_loss_3d(x_pred,y.unsqueeze(1))
+                        dice_loss=dice_loss_3d(x_pred,y.unsqueeze(1))+soft_cldice_loss(x_pred,y)
                         loss = (ce_loss + dice_loss)
                     batch_size = X.shape[0]
                     loss_sum += loss.item() * batch_size

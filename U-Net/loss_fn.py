@@ -9,6 +9,7 @@ import torch
 from gudhi.wasserstein import wasserstein_distance
 from gudhi.sklearn import RipsPersistence
 from joblib import Parallel, delayed
+import torch.nn.functional as F
 
 def get_surface_points(binary_mask):
     """
@@ -113,7 +114,7 @@ def get_class_mask_from_target(target, class_idx):
 class TopologyAwareLoss(nn.Module):
     def __init__(self, alpha, beta, warmup_epochs:int=25,classes_wo_background:int=2):
         super().__init__()
-        """Assuming class 1 is background iteratinfg through 1 and 2"""
+        """Assuming class 1 is background iteratinfg through 1 and 2, this is the non-differentiable implementation"""
         self.alpha=alpha
         self.beta=beta
         self.warmup_epochs=warmup_epochs
@@ -200,4 +201,38 @@ class TopologyAwareLoss(nn.Module):
             print("WARNING: omega very large!")
 
         return omega
+
+
+def compute_cubical_persistence_3d(volume):
+    """
+    volume: numpy array shape (D, H, W)
+    returns: list of (dim, (birth, death)) tuples
+    """
+    # Step 1: Convert to superlevel filtration and softmax to make values between 0 and 1
+    volume=-1*F.softmax(volume)
+    # Step 2: Create CubicalComplex
+    cc=gudhi.CubicalComplex(top_dimensional_cells=volume)
+    # Step 3: Compute and return persistence
+    return cc.persistence()
+
+class Cubical_Complex_Loss_Differentiable(nn.Module):
+    def __init__(self,warmup_epochs:int=25,classes_wo_background:int=2):
+        """Assuming class 0 is background, so ignoring that and iteration through other 2 classes"""
+        super().__init__()
+        self.warmup_epochs=warmup_epochs
+        self.classes_wo_background=classes_wo_background
+    def forward(self,x,y,current_epoch):
+
+        if current_epoch<self.warmup_epochs:
+            return 0
+        else:
+            # Iterate through batches
+            for i in range(y.shape[0]):
+                # Iterate through classes
+                for j in range(self.classes_wo_background):
+                    target=y[i][j+1]
+                    pred=x[i][j+1]
+                    target_persistence=compute_cubical_persistence_3d(target)
+                    pred_persistence=compute_cubical_persistence_3d(pred)
+                    
 
