@@ -203,17 +203,106 @@ class TopologyAwareLoss(nn.Module):
         return omega
 
 
-def compute_cubical_persistence_3d(volume):
+def compute_cubical_persistence_3d(prob_volume):
     """
-    volume: numpy array shape (D, H, W)
+    prob_volume: numpy array shape (D, H, W), values in [0, 1]
     returns: list of (dim, (birth, death)) tuples
     """
-    # Step 1: Convert to superlevel filtration and softmax to make values between 0 and 1
-    volume=-1*F.softmax(volume)
-    # Step 2: Create CubicalComplex
-    cc=gudhi.CubicalComplex(top_dimensional_cells=volume)
-    # Step 3: Compute and return persistence
-    return cc.persistence()
+    # Create CubicalComplex (superlevel)
+
+
+def get_persistence_info(prob_volume):
+    """
+    Returns list of dicts, each containing:
+    - 'birth_coords': (z, y, x) tuple
+    - 'death_coords': (z, y, x) tuple or None if infinite
+    - 'birth_value': float
+    - 'death_value': float or inf
+    - 'dim': 0, 1, or 2 (which homology dimension)
+    """
+    cc = gudhi.CubicalComplex(top_dimensional_cells=-prob_volume)
+    cc.persistence()
+    pairs = cc.cofaces_of_persistence_pairs()
+    
+    result = []
+    
+    # Finite pairs: pairs[0][dim] contains array of [birth_idx, death_idx]
+    for dim, dim_pairs in enumerate(pairs[0]):
+        for pair in dim_pairs:
+            birth_idx, death_idx = pair[0], pair[1]
+            birth_coords = np.unravel_index(birth_idx, prob_volume.shape)
+            death_coords = np.unravel_index(death_idx, prob_volume.shape)
+            
+            result.append({
+                'birth_coords': birth_coords,
+                'death_coords': death_coords,
+                'birth_value': prob_volume[birth_coords],
+                'death_value': prob_volume[death_coords],
+                'dim': dim
+            })
+    
+    # Infinite pairs: pairs[1][dim] contains array of [birth_idx] only
+    for dim, dim_pairs in enumerate(pairs[1]):
+        for birth_idx in dim_pairs:
+            birth_coords = np.unravel_index(birth_idx, prob_volume.shape)
+            result.append({
+                'birth_coords': birth_coords,
+                'death_coords': None,
+                'birth_value': prob_volume[birth_coords],
+                'death_value': np.inf,
+                'dim': dim
+            })
+    return result
+
+def match_diagrams(pred_info, target_info,dims:int=3):
+    """
+    pred_info: list of dicts from get_persistence_info(pred_volume)
+    target_info: list of dicts from get_persistence_info(target_volume)
+    
+    Returns: list of tuples (pred_dict, target_dict or None)
+        - If matched to a target dot: (pred_dict, target_dict)
+        - If matched to diagonal: (pred_dict, None)
+        - If target not matched: (None, target_dict)
+    """
+    matches = []
+    
+    for dim in range(dims):
+        # Filter based on dim
+        pred_h0 = [p for p in pred_info if p['dim'] == dim and p['death_coords'] is not None]
+        target_h0 = [t for t in target_info if t['dim'] == dim and t['death_coords'] is not None]
+        
+        # Track which target dots are already matched
+        target_matched = [False] * len(target_h0)
+        
+        # For each pred dot, find best match
+        for pred_dot in pred_h0:
+            # 1. Compute distance to each unmatched target dot
+            target_dist=[]
+            for target_dot in target_h0:
+                dist = (pred_dot['birth_value'] - target_dot['birth_value'])**2 + (pred_dot['death_value'] - target_dot['death_value'])**2
+                target_dist.append(dist)
+            # 2. Compute distance to diagonal
+            min_dist = ((pred_dot['birth_value'] - pred_dot['death_value']) ** 2) / 2
+            idx=-1
+            for i, val in enumerate(target_dist):
+                if (val<min_dist) and not(target_matched[i]):
+                    min_dist=val
+                    idx=i
+            # 3. Pick the closest option
+            if idx==-1:
+                # diagonal
+                matches.append((pred_dot,None))
+            # 4. If matched to target, mark that target as used
+            else:
+                matches.append((pred_dot,target_h0[idx]))
+                target_matched[idx]=True
+
+        for i, matched in enumerate(target_matched):
+            if not matched:
+                matches.append((None, target_h0[i]))
+    return matches
+
+
 
 class Cubical_Complex_Loss_Differentiable(nn.Module):
     def __init__(self,warmup_epochs:int=25,classes_wo_background:int=2):
@@ -226,6 +315,9 @@ class Cubical_Complex_Loss_Differentiable(nn.Module):
         if current_epoch<self.warmup_epochs:
             return 0
         else:
+            x=F.softmax(x)
+            x=x.detach().cpu().numpy()
+            y=y.detach().cpu().numpy()
             # Iterate through batches
             for i in range(y.shape[0]):
                 # Iterate through classes
@@ -234,5 +326,5 @@ class Cubical_Complex_Loss_Differentiable(nn.Module):
                     pred=x[i][j+1]
                     target_persistence=compute_cubical_persistence_3d(target)
                     pred_persistence=compute_cubical_persistence_3d(pred)
-                    
+
 

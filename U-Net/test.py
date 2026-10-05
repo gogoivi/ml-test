@@ -1,13 +1,11 @@
-import torch
-from modified_cldice_3d import soft_cldice_loss
-# Test shapes
-batch_size = 2
-num_classes = 3
-D, H, W = 48, 48, 48
+import numpy as np
 
-pred = torch.randn(batch_size, num_classes, D, H, W)
-target = torch.randint(0, num_classes, (batch_size, D, H, W))
+vol = np.zeros((4, 4, 4))
+vol[0, 0, 0] = 0.9  # blob 1
+vol[3, 3, 3] = 0.8  # blob 2
 
-loss = soft_cldice_loss(pred, target, class_weights=[1.0, 1.0])
-print(f"Loss: {loss.item():.4f}")
-print(f"Loss shape: {loss.shape}")  # Should be scalar  
+# Check what flat index 0 corresponds to
+print(np.unravel_index(0, (4,4,4)))   # → ?
+
+# Check what flat index 63 corresponds to
+print(np.unravel_index(63, (4,4,4)))  # → ?
