@@ -1,0 +1,15 @@
+{
+  "root_dir": "C:\\Users\\gogoi\\Desktop\\ml-test\\2023 Patients",
+  "output_dir": "C:\\Users\\gogoi\\Desktop\\ml-test\\overnight_results",
+  "epochs": 150,
+  "batch_size": 8,
+  "lr": 0.001,
+  "weight_decay": 1e-05,
+  "patience": 20,
+  "warmup_epochs": 15,
+  "size": 48,
+  "kernel_size": 3,
+  "num_classes": 3,
+  "seed": 42,
+  "file_type": "nifti"
+}

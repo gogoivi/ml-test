@@ -10,6 +10,7 @@ from gudhi.wasserstein import wasserstein_distance
 from gudhi.sklearn import RipsPersistence
 from joblib import Parallel, delayed
 import torch.nn.functional as F
+from concurrent.futures import ThreadPoolExecutor
 
 def get_surface_points(binary_mask):
     """
@@ -315,6 +316,23 @@ def compute_topo_gradient(matches, prob_volume):
     
     return grad
 
+def _compute_single_topo(args):
+    pred, target, batch_idx, class_idx = args  # unpack here
+    
+    target_persistence=get_persistence_info(target)
+    pred_persistence=get_persistence_info(pred)
+    matches=match_diagrams(pred_info=pred_persistence,target_info=target_persistence)
+    topo_grad=compute_topo_gradient(matches=matches,prob_volume=pred)
+
+    logging_value = (topo_grad ** 2).sum()
+    
+    return {
+        'batch_idx': batch_idx,
+        'class_idx': class_idx,
+        'gradient': topo_grad,
+        'log_value': logging_value
+    }
+
 class Cubical_Complex_Loss_Differentiable(nn.Module):
     def __init__(self,warmup_epochs:int=25,classes_wo_background:int=2):
         """Assuming class 0 is background, so ignoring that and iteration through other 2 classes"""
@@ -324,29 +342,40 @@ class Cubical_Complex_Loss_Differentiable(nn.Module):
     def forward(self,x,y,current_epoch):
         total_grad=torch.zeros_like(x)
         logging_value = 0.0
+
+        # Task list for multithreading
+        tasks = []
+
         if current_epoch < self.warmup_epochs:
-            return torch.tensor(0.0, device=x.device, requires_grad=False)
+                return torch.tensor(0.0, device=x.device, requires_grad=False), 0.0
         else:
             
-            x=F.softmax(x,dim=1)
-            x_np=x.detach().cpu().numpy()
+            x_soft=F.softmax(x,dim=1)
+            x_np=x_soft.detach().cpu().numpy()
             # Iterate through batches
             for i in range(y.shape[0]):
                 # Iterate through classes
                 for j in range(self.classes_wo_background):
                     target = (y[i] == j+1).float()
+                    target=target.cpu().numpy()
                     pred=x_np[i][j+1]
-                    target_persistence=get_persistence_info(target.numpy())
-                    pred_persistence=get_persistence_info(pred)
-                    matches=match_diagrams(pred_info=pred_persistence,target_info=target_persistence)
-                    topo_grad=compute_topo_gradient(matches=matches,prob_volume=pred)
+                    tasks.append((pred,target,i,j+1))
+                    # target_persistence=get_persistence_info(target)
+                    # pred_persistence=get_persistence_info(pred)
+                    # matches=match_diagrams(pred_info=pred_persistence,target_info=target_persistence)
+                    # topo_grad=compute_topo_gradient(matches=matches,prob_volume=pred)
 
-                    logging_value += (topo_grad ** 2).sum()
-                    topo_grad_tensor = torch.tensor(topo_grad, device=x.device)
-                    total_grad[i][j+1]=topo_grad_tensor
+                    # logging_value += (topo_grad ** 2).sum()
+                    # topo_grad_tensor = torch.tensor(topo_grad, device=x.device)
+                    # total_grad[i][j+1]=topo_grad_tensor
             # x.backward(gradient=total_grad)
+            with ThreadPoolExecutor(max_workers=None) as executor:
+                results = list(executor.map(_compute_single_topo, tasks))
+            for res in results:
+                total_grad[res['batch_idx']][res['class_idx']]=torch.tensor(res['gradient'], device=x.device)
+                logging_value+=res['log_value']
 
-        fake_loss = (x * total_grad.detach()).sum()
+        fake_loss = (x_soft * total_grad.detach()).sum()
         return fake_loss, logging_value
 
 

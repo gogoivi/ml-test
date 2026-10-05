@@ -1,11 +1,16 @@
-import numpy as np
+from overnight import load_napari_volumes
+import napari
 
-vol = np.zeros((4, 4, 4))
-vol[0, 0, 0] = 0.9  # blob 1
-vol[3, 3, 3] = 0.8  # blob 2
+# For each experiment:
+napari_dir = r'C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261005_091400/20261005_091403_CE_Dice_clDice_Topo/napari'
+volumes = load_napari_volumes(napari_dir)
 
-# Check what flat index 0 corresponds to
-print(np.unravel_index(0, (4,4,4)))   # → ?
-
-# Check what flat index 63 corresponds to
-print(np.unravel_index(63, (4,4,4)))  # → ?
+viewer = napari.Viewer()
+# viewer.add_image(volumes['sample_0_image'], name='MRI')
+# viewer.add_labels(volumes['sample_0_target'].astype(int), name='Ground Truth')
+# viewer.add_labels(volumes['sample_0_pred'].astype(int), name='Prediction')
+# napari.run()
+viewer.add_image(volumes['sample_1_image'], name='MRI')
+viewer.add_labels(volumes['sample_1_target'].astype(int), name='Ground Truth')
+viewer.add_labels(volumes['sample_1_pred'].astype(int), name='Prediction')
+napari.run()

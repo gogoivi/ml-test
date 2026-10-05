@@ -24,3 +24,7 @@ data/
 .venv/
 env/
 .env
+
+overnight.py
+
+tensorboard/
