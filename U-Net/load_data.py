@@ -9,20 +9,18 @@ import nibabel as nib
 import numpy as np
 
 class MRIDataset(Dataset):
-    """
-    Loads 3D TIFF and NIfTI volumes and their segmentation masks.
-    Combines multiple data sources into one dataset.
-    """
-    def __init__(self, root_dir, transform=None, augment=False):
+    def __init__(self, root_dir, transform=None, augment=False, file_type='all'):
         """
         Args:
             root_dir: Parent folder containing all subfolders
             transform: Optional transforms to apply
             augment: Whether to apply data augmentation
+            file_type: 'all', 'tiff', or 'nifti' - which files to load
         """
         self.root_dir = root_dir
         self.transform = transform
         self.augment = augment
+        self.file_type = file_type
         
         # Augmentation pipeline
         if augment:
@@ -42,34 +40,29 @@ class MRIDataset(Dataset):
                 RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.8, 1.2)),
             ])
         
-        # Build list of (input_path, target_path, file_type) tuples
         self.samples = []
         
         # === TIFF DATA (Original 2023 Patients) ===
-        
-        # Add ipsilateral TIFF samples
-        ipsi_input_dir = os.path.join(root_dir, "2023_Ipsilateral Input")
-        ipsi_target_dir = os.path.join(root_dir, "2023_Ipsilateral Target")
-        self._add_tiff_samples(ipsi_input_dir, ipsi_target_dir)
-        
-        # Add contralateral TIFF samples
-        contra_input_dir = os.path.join(root_dir, "2023_Contralateral Input")
-        contra_target_dir = os.path.join(root_dir, "2023_Contralateral Target")
-        self._add_tiff_samples(contra_input_dir, contra_target_dir)
+        if file_type in ('all', 'tiff'):
+            ipsi_input_dir = os.path.join(root_dir, "2023_Ipsilateral Input")
+            ipsi_target_dir = os.path.join(root_dir, "2023_Ipsilateral Target")
+            self._add_tiff_samples(ipsi_input_dir, ipsi_target_dir)
+            
+            contra_input_dir = os.path.join(root_dir, "2023_Contralateral Input")
+            contra_target_dir = os.path.join(root_dir, "2023_Contralateral Target")
+            self._add_tiff_samples(contra_input_dir, contra_target_dir)
         
         # === NIfTI DATA (OpenNeuro) ===
+        if file_type in ('all', 'nifti'):
+            nifti_input_left = os.path.join(root_dir, "OpenNeuro Cropped MRI L-sided NIfTI")
+            nifti_target_left = os.path.join(root_dir, "OpenNeuro Manual Segmentations L-sided NIfTI")
+            self._add_nifti_samples(nifti_input_left, nifti_target_left, side='left')
+            
+            nifti_input_right = os.path.join(root_dir, "OpenNeuro Cropped MRI R-sided NIfTI")
+            nifti_target_right = os.path.join(root_dir, "OpenNeuro Manual Segmentations R-sided NIfTI")
+            self._add_nifti_samples(nifti_input_right, nifti_target_right, side='right')
         
-        # Add left-sided NIfTI samples
-        nifti_input_left = os.path.join(root_dir, "OpenNeuro Cropped MRI L-sided NIfTI")
-        nifti_target_left = os.path.join(root_dir, "OpenNeuro Manual Segmentations L-sided NIfTI")
-        self._add_nifti_samples(nifti_input_left, nifti_target_left, side='left')
-        
-        # Add right-sided NIfTI samples
-        nifti_input_right = os.path.join(root_dir, "OpenNeuro Cropped MRI R-sided NIfTI")
-        nifti_target_right = os.path.join(root_dir, "OpenNeuro Manual Segmentations R-sided NIfTI")
-        self._add_nifti_samples(nifti_input_right, nifti_target_right, side='right')
-        
-        print(f"Loaded {len(self.samples)} total samples")
+        print(f"Loaded {len(self.samples)} total samples (file_type='{file_type}')")
     
     def _add_tiff_samples(self, input_dir, target_dir):
         """Match TIFF input and target files by MRN number (starting from targets)."""
@@ -177,10 +170,9 @@ class MRIDataset(Dataset):
         return x, y
 
 
-def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None):
+def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None, file_type='all'):
     """Creates train and test dataloaders."""
-    # Create dataset WITHOUT augmentation first (for splitting)
-    full_dataset = MRIDataset(root_dir, transform=transform, augment=False)
+    full_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type)
     
     total_samples = len(full_dataset)
     train_size = int(train_split * total_samples)
@@ -194,8 +186,8 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, tran
     test_indices = indices[train_size:]
     
     # Create separate datasets with/without augmentation
-    train_dataset = MRIDataset(root_dir, transform=transform, augment=True)
-    test_dataset = MRIDataset(root_dir, transform=transform, augment=False)
+    train_dataset = MRIDataset(root_dir, transform=transform, augment=True, file_type=file_type)
+    test_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type)
     
     # Use Subset to apply the split
     train_dataset = torch.utils.data.Subset(train_dataset, train_indices)

@@ -203,14 +203,6 @@ class TopologyAwareLoss(nn.Module):
         return omega
 
 
-def compute_cubical_persistence_3d(prob_volume):
-    """
-    prob_volume: numpy array shape (D, H, W), values in [0, 1]
-    returns: list of (dim, (birth, death)) tuples
-    """
-    # Create CubicalComplex (superlevel)
-
-
 def get_persistence_info(prob_volume):
     """
     Returns list of dicts, each containing:
@@ -302,7 +294,26 @@ def match_diagrams(pred_info, target_info,dims:int=3):
                 matches.append((None, target_h0[i]))
     return matches
 
-
+def compute_topo_gradient(matches, prob_volume):
+    """
+    Returns gradient tensor same shape as prob_volume
+    """
+    grad = np.zeros_like(prob_volume)
+    
+    for pred_dot, target_dot in matches:
+        if pred_dot is not None and target_dot is not None:
+            grad[pred_dot['birth_coords']] += 2 * (pred_dot['birth_value'] - target_dot['birth_value'])
+            grad[pred_dot['death_coords']] += 2 * (pred_dot['death_value'] - target_dot['death_value']) 
+        elif pred_dot is not None and target_dot is None:
+            diagonal_point = (pred_dot['birth_value'] + pred_dot['death_value']) / 2
+            grad[pred_dot['birth_coords']] += 2 * (pred_dot['birth_value'] - diagonal_point)
+            grad[pred_dot['death_coords']] += 2 * (pred_dot['death_value'] - diagonal_point)
+        elif pred_dot is None and target_dot is not None:
+            # Claude gave this - the idea is since there is no predicted struct here instead we push up the prob of the pixels here
+            birth_coords = target_dot['birth_coords']
+            grad[birth_coords] += 2 * (prob_volume[birth_coords] - target_dot['birth_value'])
+    
+    return grad
 
 class Cubical_Complex_Loss_Differentiable(nn.Module):
     def __init__(self,warmup_epochs:int=25,classes_wo_background:int=2):
@@ -311,20 +322,31 @@ class Cubical_Complex_Loss_Differentiable(nn.Module):
         self.warmup_epochs=warmup_epochs
         self.classes_wo_background=classes_wo_background
     def forward(self,x,y,current_epoch):
-
-        if current_epoch<self.warmup_epochs:
-            return 0
+        total_grad=torch.zeros_like(x)
+        logging_value = 0.0
+        if current_epoch < self.warmup_epochs:
+            return torch.tensor(0.0, device=x.device, requires_grad=False)
         else:
-            x=F.softmax(x)
-            x=x.detach().cpu().numpy()
-            y=y.detach().cpu().numpy()
+            
+            x=F.softmax(x,dim=1)
+            x_np=x.detach().cpu().numpy()
             # Iterate through batches
             for i in range(y.shape[0]):
                 # Iterate through classes
                 for j in range(self.classes_wo_background):
-                    target=y[i][j+1]
-                    pred=x[i][j+1]
-                    target_persistence=compute_cubical_persistence_3d(target)
-                    pred_persistence=compute_cubical_persistence_3d(pred)
+                    target = (y[i] == j+1).float()
+                    pred=x_np[i][j+1]
+                    target_persistence=get_persistence_info(target.numpy())
+                    pred_persistence=get_persistence_info(pred)
+                    matches=match_diagrams(pred_info=pred_persistence,target_info=target_persistence)
+                    topo_grad=compute_topo_gradient(matches=matches,prob_volume=pred)
+
+                    logging_value += (topo_grad ** 2).sum()
+                    topo_grad_tensor = torch.tensor(topo_grad, device=x.device)
+                    total_grad[i][j+1]=topo_grad_tensor
+            # x.backward(gradient=total_grad)
+
+        fake_loss = (x * total_grad.detach()).sum()
+        return fake_loss, logging_value
 
 
