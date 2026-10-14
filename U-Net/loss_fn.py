@@ -11,6 +11,8 @@ from gudhi.sklearn import RipsPersistence
 from joblib import Parallel, delayed
 import torch.nn.functional as F
 from concurrent.futures import ThreadPoolExecutor
+from scipy.optimize import linear_sum_assignment
+import numpy as np
 
 def get_surface_points(binary_mask):
     """
@@ -247,83 +249,172 @@ def get_persistence_info(prob_volume):
             })
     return result
 
-def match_diagrams(pred_info, target_info,dims:int=3):
+
+
+def match_diagrams(pred_info, target_info, dims: int = 3):
     """
     pred_info: list of dicts from get_persistence_info(pred_volume)
     target_info: list of dicts from get_persistence_info(target_volume)
-    
-    Returns: list of tuples (pred_dict, target_dict or None)
-        - If matched to a target dot: (pred_dict, target_dict)
-        - If matched to diagonal: (pred_dict, None)
-        - If target not matched: (None, target_dict)
     """
     matches = []
     
     for dim in range(dims):
-        # Filter based on dim
-        pred_h0 = [p for p in pred_info if p['dim'] == dim and p['death_coords'] is not None]
-        target_h0 = [t for t in target_info if t['dim'] == dim and t['death_coords'] is not None]
+        # Include ALL features (finite AND infinite)
+        pred_dim = [p for p in pred_info if p['dim'] == dim]
+        target_dim = [t for t in target_info if t['dim'] == dim]
         
-        # Track which target dots are already matched
-        target_matched = [False] * len(target_h0)
+        n_pred = len(pred_dim)
+        n_target = len(target_dim)
         
-        # For each pred dot, find best match
-        for pred_dot in pred_h0:
-            # 1. Compute distance to each unmatched target dot
-            target_dist=[]
-            for target_dot in target_h0:
-                dist = (pred_dot['birth_value'] - target_dot['birth_value'])**2 + (pred_dot['death_value'] - target_dot['death_value'])**2
-                target_dist.append(dist)
-            # 2. Compute distance to diagonal
-            min_dist = ((pred_dot['birth_value'] - pred_dot['death_value']) ** 2) / 2
-            idx=-1
-            for i, val in enumerate(target_dist):
-                if (val<min_dist) and not(target_matched[i]):
-                    min_dist=val
-                    idx=i
-            # 3. Pick the closest option
-            if idx==-1:
-                # diagonal
-                matches.append((pred_dot,None))
-            # 4. If matched to target, mark that target as used
-            else:
-                matches.append((pred_dot,target_h0[idx]))
-                target_matched[idx]=True
+        if n_pred == 0 and n_target == 0:
+            continue
+        if n_pred == 0:
+            for t in target_dim:
+                matches.append((None, t))
+            continue
+        if n_target == 0:
+            for p in pred_dim:
+                matches.append((p, None))
+            continue
+        
+        size = n_pred + n_target
+        cost = np.full((size, size), np.inf)
+        
+        # Helper to get effective death value (treat inf as 0 for matching cost) (this part was claude)
+        def effective_death(dot):
+            if dot['death_value'] == np.inf:
+                return 0.0  # Convention: infinite features "die at 0"
+            return dot['death_value']
+        
+        # 1. Pred-to-target distances
+        for i, pred_dot in enumerate(pred_dim):
+            for j, target_dot in enumerate(target_dim):
+                dist = (pred_dot['birth_value'] - target_dot['birth_value'])**2 + \
+                       (effective_death(pred_dot) - effective_death(target_dot))**2
+                cost[i, j] = dist
+        
+        # 2. Pred-to-diagonal costs
+        for i, pred_dot in enumerate(pred_dim):
+            d_eff = effective_death(pred_dot)
+            diag_cost = ((pred_dot['birth_value'] - d_eff) ** 2) / 2
+            cost[i, n_target + i] = diag_cost
+        
+        # 3. Target-to-diagonal costs
+        for j, target_dot in enumerate(target_dim):
+            d_eff = 0.0 if target_dot['death_value'] == np.inf else target_dot['death_value']
+            diag_cost = ((target_dot['birth_value'] - d_eff) ** 2) / 2
+            
+            # Penalty: infinite features should not go to diagonal easily
+            if target_dot['death_value'] == np.inf:
+                diag_cost += 1.0  # Add penalty - forces matching if possible
+            
+            cost[n_pred + j, j] = diag_cost
 
-        for i, matched in enumerate(target_matched):
-            if not matched:
-                matches.append((None, target_h0[i]))
+        # for j, target_dot in enumerate(target_dim):
+        #     d_eff = effective_death(target_dot)
+        #     diag_cost = ((target_dot['birth_value'] - d_eff) ** 2) / 2
+        #     cost[n_pred + j, j] = diag_cost
+        
+        # 4. Diagonal-to-diagonal - free
+        cost[n_pred:, n_target:] = 0
+        
+        row_ind, col_ind = linear_sum_assignment(cost)
+        
+        for r, c in zip(row_ind, col_ind):
+            if r < n_pred and c < n_target:
+                matches.append((pred_dim[r], target_dim[c]))
+            elif r < n_pred and c >= n_target:
+                matches.append((pred_dim[r], None))
+            elif r >= n_pred and c < n_target:
+                matches.append((None, target_dim[c]))
+    
     return matches
 
 def compute_topo_gradient(matches, prob_volume):
-    """
-    Returns gradient tensor same shape as prob_volume
-    """
     grad = np.zeros_like(prob_volume)
     
     for pred_dot, target_dot in matches:
         if pred_dot is not None and target_dot is not None:
+            # Push birth toward target birth
             grad[pred_dot['birth_coords']] += 2 * (pred_dot['birth_value'] - target_dot['birth_value'])
-            grad[pred_dot['death_coords']] += 2 * (pred_dot['death_value'] - target_dot['death_value']) 
+            # Only push death if finite
+            if pred_dot['death_coords'] is not None:
+                target_death = 0.0 if target_dot['death_value'] == np.inf else target_dot['death_value']
+                grad[pred_dot['death_coords']] += 2 * (pred_dot['death_value'] - target_death)
+                
         elif pred_dot is not None and target_dot is None:
-            diagonal_point = (pred_dot['birth_value'] + pred_dot['death_value']) / 2
+            d_eff = 0.0 if pred_dot['death_value'] == np.inf else pred_dot['death_value']
+            diagonal_point = (pred_dot['birth_value'] + d_eff) / 2
             grad[pred_dot['birth_coords']] += 2 * (pred_dot['birth_value'] - diagonal_point)
-            grad[pred_dot['death_coords']] += 2 * (pred_dot['death_value'] - diagonal_point)
-        elif pred_dot is None and target_dot is not None:
-            # Claude gave this - the idea is since there is no predicted struct here instead we push up the prob of the pixels here
-            birth_coords = target_dot['birth_coords']
-            grad[birth_coords] += 2 * (prob_volume[birth_coords] - target_dot['birth_value'])
+            if pred_dot['death_coords'] is not None:
+                grad[pred_dot['death_coords']] += 2 * (pred_dot['death_value'] - diagonal_point)
     
     return grad
 
-def _compute_single_topo(args):
-    pred, target, batch_idx, class_idx = args  # unpack here
+class Cubical_Complex_Loss_Differentiable(nn.Module):
+    def __init__(self, warmup_epochs: int = 25, classes_wo_background: int = 2, N: int = 1):
+        super().__init__()
+        self.warmup_epochs = warmup_epochs
+        self.classes_wo_background = classes_wo_background
+        self.N = N
+        self._target_cache = {}  # Add cache
     
-    target_persistence=get_persistence_info(target)
-    pred_persistence=get_persistence_info(pred)
-    matches=match_diagrams(pred_info=pred_persistence,target_info=target_persistence)
-    topo_grad=compute_topo_gradient(matches=matches,prob_volume=pred)
+    def _get_cache_key(self, target_np):
+        """Create hashable key from target array"""
+        return target_np.tobytes()
+    
+    def forward(self, x, y, current_epoch):
+        total_grad = torch.zeros_like(x)
+        logging_value = 0.0
 
+        if (current_epoch < self.warmup_epochs) or (current_epoch % self.N != 0):
+            return torch.tensor(0.0, device=x.device, requires_grad=False), 0.0
+        
+        x_soft = F.softmax(x, dim=1)
+        x_np = x_soft.detach().cpu().numpy()
+        
+        tasks = []
+        for i in range(y.shape[0]):
+            for j in range(self.classes_wo_background):
+                target = (y[i] == j + 1).float()
+                target_np = target.cpu().numpy()
+                pred = x_np[i][j + 1]
+                
+                # Check cache for target persistence
+                cache_key = self._get_cache_key(target_np)
+                if cache_key not in self._target_cache:
+                    self._target_cache[cache_key] = get_persistence_info(target_np)
+                
+                target_persistence = self._target_cache[cache_key]
+                tasks.append((pred, target_persistence, i, j + 1))
+        
+        with ThreadPoolExecutor(max_workers=None) as executor:
+            results = list(executor.map(_compute_single_topo_cached, tasks))
+        
+        for res in results:
+            total_grad[res['batch_idx']][res['class_idx']] = torch.tensor(res['gradient'], device=x.device)
+            logging_value += res['log_value']
+
+        fake_loss = (x_soft * total_grad.detach()).sum()
+        return fake_loss, logging_value
+
+
+def _compute_single_topo_cached(args):
+    """Modified to accept pre-computed target persistence"""
+    pred, target_persistence, batch_idx, class_idx = args
+    
+    # Threshold to find topological structure LOCATIONS
+    pred_binary = (pred > 0.5).astype(float)
+    pred_persistence = get_persistence_info(pred_binary)
+    
+    # FIX: Replace binary values (0/1) with continuous values from original pred
+    for p in pred_persistence:
+        p['birth_value'] = pred[p['birth_coords']]
+        if p['death_coords'] is not None:
+            p['death_value'] = pred[p['death_coords']]
+    
+    matches = match_diagrams(pred_info=pred_persistence, target_info=target_persistence)
+    topo_grad = compute_topo_gradient(matches=matches, prob_volume=pred)
     logging_value = (topo_grad ** 2).sum()
     
     return {
@@ -332,50 +423,4 @@ def _compute_single_topo(args):
         'gradient': topo_grad,
         'log_value': logging_value
     }
-
-class Cubical_Complex_Loss_Differentiable(nn.Module):
-    def __init__(self,warmup_epochs:int=25,classes_wo_background:int=2):
-        """Assuming class 0 is background, so ignoring that and iteration through other 2 classes"""
-        super().__init__()
-        self.warmup_epochs=warmup_epochs
-        self.classes_wo_background=classes_wo_background
-    def forward(self,x,y,current_epoch):
-        total_grad=torch.zeros_like(x)
-        logging_value = 0.0
-
-        # Task list for multithreading
-        tasks = []
-
-        if current_epoch < self.warmup_epochs:
-                return torch.tensor(0.0, device=x.device, requires_grad=False), 0.0
-        else:
-            
-            x_soft=F.softmax(x,dim=1)
-            x_np=x_soft.detach().cpu().numpy()
-            # Iterate through batches
-            for i in range(y.shape[0]):
-                # Iterate through classes
-                for j in range(self.classes_wo_background):
-                    target = (y[i] == j+1).float()
-                    target=target.cpu().numpy()
-                    pred=x_np[i][j+1]
-                    tasks.append((pred,target,i,j+1))
-                    # target_persistence=get_persistence_info(target)
-                    # pred_persistence=get_persistence_info(pred)
-                    # matches=match_diagrams(pred_info=pred_persistence,target_info=target_persistence)
-                    # topo_grad=compute_topo_gradient(matches=matches,prob_volume=pred)
-
-                    # logging_value += (topo_grad ** 2).sum()
-                    # topo_grad_tensor = torch.tensor(topo_grad, device=x.device)
-                    # total_grad[i][j+1]=topo_grad_tensor
-            # x.backward(gradient=total_grad)
-            with ThreadPoolExecutor(max_workers=None) as executor:
-                results = list(executor.map(_compute_single_topo, tasks))
-            for res in results:
-                total_grad[res['batch_idx']][res['class_idx']]=torch.tensor(res['gradient'], device=x.device)
-                logging_value+=res['log_value']
-
-        fake_loss = (x_soft * total_grad.detach()).sum()
-        return fake_loss, logging_value
-
 
