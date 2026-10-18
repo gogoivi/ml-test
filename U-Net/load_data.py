@@ -223,7 +223,7 @@ def ensure_nnunet_format(root_dir, dataset_name="Dataset001_MRI"):
 
 
 class MRIDataset(Dataset):
-    def __init__(self, root_dir, transform=None, augment=False, file_type='all', dataset_name="Dataset001_MRI"):
+    def __init__(self, root_dir, transform=None, augment=False, file_type='all', dataset_name="Dataset001_MRI",pseudo_labels=None):
         """
         Args:
             root_dir: Parent folder containing all subfolders
@@ -237,6 +237,8 @@ class MRIDataset(Dataset):
         self.augment = augment
         self.file_type = file_type
         self.dataset_name = dataset_name
+        self.pseudo_labels = pseudo_labels if pseudo_labels is not None else {}
+        
         
         # Augmentation pipeline
         if augment:
@@ -396,7 +398,16 @@ class MRIDataset(Dataset):
         # Convert to tensors
         x = torch.from_numpy(x)
         y = torch.from_numpy(y)
-        
+        # Merge pseudo-labels (before augmentation)
+        if idx in self.pseudo_labels:        
+            pseudo = self.pseudo_labels[idx]
+            
+            # Where we have pseudo-labels AND gt is background
+            apply_mask = pseudo['mask'] & (y == 0)
+            
+            # Override labels
+            y[apply_mask] = pseudo['classes'][apply_mask]
+    
         # Apply augmentation
         if self.augment:
             data = {"image": x, "label": y.unsqueeze(0).float()}
@@ -410,9 +421,9 @@ class MRIDataset(Dataset):
         return x, y,idx
 
 
-def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None, file_type='all', dataset_name="Dataset001_MRI"):
+def get_dataloaders(root_dir, batch_size=20, train_split=0.8, num_workers=0, transform=None, file_type='all', dataset_name="Dataset001_MRI",pseudo_labels=None):
     """Creates train and test dataloaders."""
-    full_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type, dataset_name=dataset_name)
+    full_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type, dataset_name=dataset_name,pseudo_labels=pseudo_labels)
     
     total_samples = len(full_dataset)
     train_size = int(train_split * total_samples)
@@ -426,11 +437,13 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, tran
     test_indices = indices[train_size:]
     
     # Create separate datasets with/without augmentation
-    train_dataset = MRIDataset(root_dir, transform=transform, augment=True, file_type=file_type, dataset_name=dataset_name)
-    test_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type, dataset_name=dataset_name)
+    train_dataset = MRIDataset(..., augment=True, pseudo_labels=pseudo_labels)
+    train_no_aug_dataset=MRIDataset(...,augment=False,pseudo_labels=pseudo_labels)
+    test_dataset = MRIDataset(..., augment=False, pseudo_labels=pseudo_labels)
     
     # Use Subset to apply the split
     train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
+    train_no_aug_dataset=torch.utils.data.Subset(train_no_aug_dataset,train_indices)
     test_dataset = torch.utils.data.Subset(test_dataset, test_indices)
     
     print(f"Train samples: {len(train_indices)}, Test samples: {len(test_indices)}")
@@ -441,15 +454,23 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, tran
         shuffle=True,
         num_workers=num_workers,
     )
+    train_no_aug_loader = DataLoader(
+        train_no_aug_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+    )
     
     test_loader = DataLoader(
         test_dataset, 
         batch_size=batch_size, 
         shuffle=False,
-        num_workers=num_workers
+        num_workers=num_workers,
     )
-    
-    return train_loader, test_loader
+    if pseudo_labels:
+        return train_loader, train_no_aug_loader,test_loader
+    else:
+        return train_loader,test_loader
 
 
 def compute_class_weights(root_dir, num_classes=3, dampen=0.5, dataset_name="Dataset001_MRI"):
