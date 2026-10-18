@@ -19,6 +19,10 @@ runs/
 # Data
 data/
 2023 Patients/
+nnUnet_preprocessed/
+nnUNet_raw/
+nnUnet_results/
+OUTPUT_FOLDER/
 
 # Local Python environments / config
 .venv/

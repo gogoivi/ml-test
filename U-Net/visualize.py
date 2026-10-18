@@ -236,7 +236,7 @@ def main():
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261012_234358\20261013_040445_topo_non-diff\checkpoints\best_model.pth",
+        'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261012_234358\20261013_003318_CE_Dice_clDice\checkpoints\best_model.pth",
         'data_root': r"C:\Users\gogoi\Desktop\ml-test\2023 Patients",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
         'num_samples': 3,    # How many random samples to visualize

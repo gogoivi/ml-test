@@ -100,7 +100,7 @@ if __name__=="__main__":
         u_net.train()
         train_loss_sum=0
         train_sample_count=0
-        for batch, (X,y) in enumerate(train_dataloader):
+        for batch, (X,y,idx) in enumerate(train_dataloader):
             X=X.to(device)
             y=y.to(device)
             with autocast(device_type=device):
@@ -148,7 +148,7 @@ if __name__=="__main__":
             with torch.no_grad():
                 sample_count = 0
                 loss_sum=0
-                for (X,y) in test_dataloader:
+                for (X,y,idx) in test_dataloader:
                     X=X.to(device)
                     y=y.to(device)
                     with autocast(device_type=device):

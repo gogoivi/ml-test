@@ -1,26 +1,242 @@
-# Claude generated this code as I thought it wasnt related to the actual model architecture and thus I did not need to learn it as in depth
 # load_data.py
 
 import os
+import json
+import shutil
 import torch
 from torch.utils.data import Dataset, DataLoader
 import tifffile
 import nibabel as nib
 import numpy as np
 
+
+def is_nnunet_format(root_dir, dataset_name="Dataset001_MRI"):
+    """Check if the data is already in nnU-Net format."""
+    dataset_dir = os.path.join(root_dir, dataset_name)
+    required_dirs = ["imagesTr", "labelsTr"]
+    required_file = "dataset.json"
+    
+    if not os.path.exists(dataset_dir):
+        return False
+    
+    for d in required_dirs:
+        if not os.path.exists(os.path.join(dataset_dir, d)):
+            return False
+    
+    if not os.path.exists(os.path.join(dataset_dir, required_file)):
+        return False
+    
+    # Check that there are actually files in the directories
+    images_dir = os.path.join(dataset_dir, "imagesTr")
+    labels_dir = os.path.join(dataset_dir, "labelsTr")
+    
+    if len(os.listdir(images_dir)) == 0 or len(os.listdir(labels_dir)) == 0:
+        return False
+    
+    return True
+
+
+def convert_to_nnunet_format(root_dir, dataset_name="Dataset001_MRI", dataset_id=1):
+    """
+    Convert existing folder structure to nnU-Net format.
+    
+    Original structure:
+    - 2023_Ipsilateral Input/ -> {mrn}_cropped.tiff
+    - 2023_Ipsilateral Target/ -> {mrn}_mask.tiff
+    - 2023_Contralateral Input/ -> {mrn}_cropped.tiff
+    - 2023_Contralateral Target/ -> {mrn}_mask.tiff
+    - OpenNeuro Cropped MRI L-sided NIfTI/ -> {num}_cropped_left.nii.gz
+    - OpenNeuro Manual Segmentations L-sided NIfTI/ -> {num}_left_manual.nii.gz
+    - OpenNeuro Cropped MRI R-sided NIfTI/ -> {num}_cropped_right.nii.gz
+    - OpenNeuro Manual Segmentations R-sided NIfTI/ -> {num}_right_manual.nii.gz
+    
+    nnU-Net structure:
+    - Dataset001_MRI/
+      - imagesTr/
+        - MRI_0000_0000.nii.gz
+      - labelsTr/
+        - MRI_0000.nii.gz
+      - dataset.json
+    """
+    dataset_dir = os.path.join(root_dir, dataset_name)
+    images_dir = os.path.join(dataset_dir, "imagesTr")
+    labels_dir = os.path.join(dataset_dir, "labelsTr")
+    
+    os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(labels_dir, exist_ok=True)
+    
+    case_id = 0
+    training_cases = []
+    
+    # Helper function to save volume as NIfTI
+    def save_as_nifti(volume, output_path):
+        nii = nib.Nifti1Image(volume, affine=np.eye(4))
+        nib.save(nii, output_path)
+    
+    # Helper function to clean labels (remap 3 -> 0)
+    def clean_labels(label_vol):
+        """Remap label 3 (uncertain) to 0 (background)."""
+        label_vol = label_vol.copy()
+        label_vol[label_vol == 3] = 0
+        return label_vol
+    
+    # Process TIFF data
+    tiff_pairs = [
+        ("2023_Ipsilateral Input", "2023_Ipsilateral Target"),
+        ("2023_Contralateral Input", "2023_Contralateral Target"),
+    ]
+    
+    for input_folder, target_folder in tiff_pairs:
+        input_dir = os.path.join(root_dir, input_folder)
+        target_dir = os.path.join(root_dir, target_folder)
+        
+        if not os.path.exists(input_dir) or not os.path.exists(target_dir):
+            print(f"Skipping {input_folder} - directory not found")
+            continue
+        
+        input_files = sorted(os.listdir(input_dir))
+        target_files = sorted(os.listdir(target_dir))
+        
+        for target_file in target_files:
+            if not target_file.endswith(('.tif', '.tiff')):
+                continue
+            
+            mrn = target_file.replace('_mask.tiff', '').replace('_mask.tif', '')
+            input_file = f"{mrn}_cropped.tiff"
+            input_file_alt = f"{mrn}_cropped.tif"
+            
+            input_path = None
+            if input_file in input_files:
+                input_path = os.path.join(input_dir, input_file)
+            elif input_file_alt in input_files:
+                input_path = os.path.join(input_dir, input_file_alt)
+            
+            if input_path:
+                target_path = os.path.join(target_dir, target_file)
+                
+                # Load volumes
+                input_vol = tifffile.imread(input_path).astype(np.float32)
+                target_vol = tifffile.imread(target_path).astype(np.int16)
+                
+                # Clean labels: remap 3 -> 0
+                target_vol = clean_labels(target_vol)
+                
+                # Save as NIfTI with nnU-Net naming
+                case_name = f"MRI_{case_id:04d}"
+                save_as_nifti(input_vol, os.path.join(images_dir, f"{case_name}_0000.nii.gz"))
+                save_as_nifti(target_vol, os.path.join(labels_dir, f"{case_name}.nii.gz"))
+                
+                training_cases.append(case_name)
+                case_id += 1
+                print(f"Converted: {mrn} -> {case_name}")
+    
+    # Process NIfTI data
+    nifti_pairs = [
+        ("OpenNeuro Cropped MRI L-sided NIfTI", "OpenNeuro Manual Segmentations L-sided NIfTI", "left"),
+        ("OpenNeuro Cropped MRI R-sided NIfTI", "OpenNeuro Manual Segmentations R-sided NIfTI", "right"),
+    ]
+    
+    for input_folder, target_folder, side in nifti_pairs:
+        input_dir = os.path.join(root_dir, input_folder)
+        target_dir = os.path.join(root_dir, target_folder)
+        
+        if not os.path.exists(input_dir) or not os.path.exists(target_dir):
+            print(f"Skipping {input_folder} - directory not found")
+            continue
+        
+        input_files = sorted(os.listdir(input_dir))
+        target_files = sorted(os.listdir(target_dir))
+        
+        for target_file in target_files:
+            if not target_file.endswith('.nii.gz'):
+                continue
+            
+            parts = target_file.replace('.nii.gz', '').split('_')
+            if len(parts) >= 3 and parts[-1] == 'manual':
+                subject_num = parts[0]
+                input_file = f"{subject_num}_cropped_{side}.nii.gz"
+                
+                if input_file in input_files:
+                    input_path = os.path.join(input_dir, input_file)
+                    target_path = os.path.join(target_dir, target_file)
+                    
+                    # Load NIfTI, clean labels, and save
+                    # (instead of just copying)
+                    input_nii = nib.load(input_path)
+                    target_nii = nib.load(target_path)
+                    
+                    input_vol = input_nii.get_fdata().astype(np.float32)
+                    target_vol = target_nii.get_fdata().astype(np.int16)
+                    
+                    # Clean labels: remap 3 -> 0
+                    target_vol = clean_labels(target_vol)
+                    
+                    case_name = f"MRI_{case_id:04d}"
+                    save_as_nifti(input_vol, os.path.join(images_dir, f"{case_name}_0000.nii.gz"))
+                    save_as_nifti(target_vol, os.path.join(labels_dir, f"{case_name}.nii.gz"))
+                    
+                    training_cases.append(case_name)
+                    case_id += 1
+                    print(f"Converted: {subject_num}_{side} -> {case_name}")
+    
+    # Create dataset.json
+    dataset_json = {
+        "channel_names": {
+            "0": "MRI"
+        },
+        "labels": {
+            "background": 0,
+            "nerve": 1,
+            "vessel": 2
+        },
+        "numTraining": len(training_cases),
+        "file_ending": ".nii.gz",
+        "name": dataset_name,
+        "dataset_id": dataset_id,
+        "reference": "",
+        "licence": "",
+        "description": "MRI Nerve/Vessel Segmentation Dataset",
+        "training": [
+            {
+                "image": f"./imagesTr/{case}_0000.nii.gz",
+                "label": f"./labelsTr/{case}.nii.gz"
+            } for case in training_cases
+        ]
+    }
+    
+    with open(os.path.join(dataset_dir, "dataset.json"), 'w') as f:
+        json.dump(dataset_json, f, indent=4)
+    
+    print(f"\nConverted {len(training_cases)} cases to nnU-Net format in {dataset_dir}")
+    print(f"Label 3 (uncertain) has been remapped to 0 (background) in all files.")
+    return dataset_dir
+
+
+def ensure_nnunet_format(root_dir, dataset_name="Dataset001_MRI"):
+    """Check if data is in nnU-Net format, convert if not. Returns the dataset directory."""
+    if is_nnunet_format(root_dir, dataset_name):
+        print(f"Data already in nnU-Net format at {os.path.join(root_dir, dataset_name)}")
+        return os.path.join(root_dir, dataset_name)
+    else:
+        print("Converting data to nnU-Net format...")
+        return convert_to_nnunet_format(root_dir, dataset_name)
+
+
 class MRIDataset(Dataset):
-    def __init__(self, root_dir, transform=None, augment=False, file_type='all'):
+    def __init__(self, root_dir, transform=None, augment=False, file_type='all', dataset_name="Dataset001_MRI"):
         """
         Args:
             root_dir: Parent folder containing all subfolders
             transform: Optional transforms to apply
             augment: Whether to apply data augmentation
-            file_type: 'all', 'tiff', or 'nifti' - which files to load
+            file_type: 'all', 'tiff', or 'nifti' - which files to load (only used for original format)
+            dataset_name: Name of the nnU-Net dataset folder
         """
         self.root_dir = root_dir
         self.transform = transform
         self.augment = augment
         self.file_type = file_type
+        self.dataset_name = dataset_name
         
         # Augmentation pipeline
         if augment:
@@ -42,27 +258,51 @@ class MRIDataset(Dataset):
         
         self.samples = []
         
-        # === TIFF DATA (Original 2023 Patients) ===
-        if file_type in ('all', 'tiff'):
-            ipsi_input_dir = os.path.join(root_dir, "2023_Ipsilateral Input")
-            ipsi_target_dir = os.path.join(root_dir, "2023_Ipsilateral Target")
-            self._add_tiff_samples(ipsi_input_dir, ipsi_target_dir)
-            
-            contra_input_dir = os.path.join(root_dir, "2023_Contralateral Input")
-            contra_target_dir = os.path.join(root_dir, "2023_Contralateral Target")
-            self._add_tiff_samples(contra_input_dir, contra_target_dir)
+        # Ensure data is in nnU-Net format (convert if necessary)
+        self.dataset_dir = ensure_nnunet_format(root_dir, dataset_name)
         
-        # === NIfTI DATA (OpenNeuro) ===
-        if file_type in ('all', 'nifti'):
-            nifti_input_left = os.path.join(root_dir, "OpenNeuro Cropped MRI L-sided NIfTI")
-            nifti_target_left = os.path.join(root_dir, "OpenNeuro Manual Segmentations L-sided NIfTI")
-            self._add_nifti_samples(nifti_input_left, nifti_target_left, side='left')
-            
-            nifti_input_right = os.path.join(root_dir, "OpenNeuro Cropped MRI R-sided NIfTI")
-            nifti_target_right = os.path.join(root_dir, "OpenNeuro Manual Segmentations R-sided NIfTI")
-            self._add_nifti_samples(nifti_input_right, nifti_target_right, side='right')
+        # Load from nnU-Net format
+        self._load_nnunet_samples()
         
-        print(f"Loaded {len(self.samples)} total samples (file_type='{file_type}')")
+        print(f"Loaded {len(self.samples)} total samples")
+    
+    def _load_nnunet_samples(self):
+        """Load samples from nnU-Net folder structure."""
+        images_dir = os.path.join(self.dataset_dir, "imagesTr")
+        labels_dir = os.path.join(self.dataset_dir, "labelsTr")
+        
+        # Read dataset.json for the list of training cases
+        dataset_json_path = os.path.join(self.dataset_dir, "dataset.json")
+        
+        if os.path.exists(dataset_json_path):
+            with open(dataset_json_path, 'r') as f:
+                dataset_info = json.load(f)
+            
+            for case in dataset_info.get("training", []):
+                # Paths in dataset.json are relative, convert to absolute
+                image_path = os.path.join(self.dataset_dir, case["image"].replace("./", ""))
+                label_path = os.path.join(self.dataset_dir, case["label"].replace("./", ""))
+                
+                if os.path.exists(image_path) and os.path.exists(label_path):
+                    self.samples.append((image_path, label_path, 'nifti'))
+                else:
+                    print(f"Warning: Missing files for case - {image_path} or {label_path}")
+        else:
+            # Fallback: scan directories directly
+            label_files = sorted([f for f in os.listdir(labels_dir) if f.endswith('.nii.gz')])
+            
+            for label_file in label_files:
+                # Label: MRI_0000.nii.gz -> Image: MRI_0000_0000.nii.gz
+                case_name = label_file.replace('.nii.gz', '')
+                image_file = f"{case_name}_0000.nii.gz"
+                
+                image_path = os.path.join(images_dir, image_file)
+                label_path = os.path.join(labels_dir, label_file)
+                
+                if os.path.exists(image_path):
+                    self.samples.append((image_path, label_path, 'nifti'))
+                else:
+                    print(f"Warning: No matching image for {label_file}")
     
     def _add_tiff_samples(self, input_dir, target_dir):
         """Match TIFF input and target files by MRN number (starting from targets)."""
@@ -167,12 +407,12 @@ class MRIDataset(Dataset):
         if self.transform:
             x, y = self.transform(x, y)
         
-        return x, y
+        return x, y,idx
 
 
-def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None, file_type='all'):
+def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, transform=None, file_type='all', dataset_name="Dataset001_MRI"):
     """Creates train and test dataloaders."""
-    full_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type)
+    full_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type, dataset_name=dataset_name)
     
     total_samples = len(full_dataset)
     train_size = int(train_split * total_samples)
@@ -186,8 +426,8 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, tran
     test_indices = indices[train_size:]
     
     # Create separate datasets with/without augmentation
-    train_dataset = MRIDataset(root_dir, transform=transform, augment=True, file_type=file_type)
-    test_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type)
+    train_dataset = MRIDataset(root_dir, transform=transform, augment=True, file_type=file_type, dataset_name=dataset_name)
+    test_dataset = MRIDataset(root_dir, transform=transform, augment=False, file_type=file_type, dataset_name=dataset_name)
     
     # Use Subset to apply the split
     train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
@@ -212,9 +452,9 @@ def get_dataloaders(root_dir, batch_size=2, train_split=0.8, num_workers=0, tran
     return train_loader, test_loader
 
 
-def compute_class_weights(root_dir, num_classes=3, dampen=0.5):
+def compute_class_weights(root_dir, num_classes=3, dampen=0.5, dataset_name="Dataset001_MRI"):
     """Compute class weights based on frequency across ALL samples."""
-    dataset = MRIDataset(root_dir)
+    dataset = MRIDataset(root_dir, dataset_name=dataset_name)
     
     class_counts = torch.zeros(num_classes)
     
@@ -245,9 +485,9 @@ def compute_class_weights(root_dir, num_classes=3, dampen=0.5):
     return weights
 
 
-def inspect_data(root_dir):
+def inspect_data(root_dir, dataset_name="Dataset001_MRI"):
     """Check your data before training."""
-    dataset = MRIDataset(root_dir)
+    dataset = MRIDataset(root_dir, dataset_name=dataset_name)
     
     if len(dataset) == 0:
         print("ERROR: No samples found!")
@@ -266,9 +506,9 @@ def inspect_data(root_dir):
     return x, y
 
 
-def check_all_labels(root_dir, num_classes=3):
+def check_all_labels(root_dir, num_classes=3, dataset_name="Dataset001_MRI"):
     """Find any files with unexpected label values."""
-    dataset = MRIDataset(root_dir)
+    dataset = MRIDataset(root_dir, dataset_name=dataset_name)
     
     print("Checking all target files for invalid labels...")
     print(f"Expected labels: 0 to {num_classes - 1}\n")
@@ -295,6 +535,7 @@ def check_all_labels(root_dir, num_classes=3):
         print(f"\n{len(problem_files)} files have invalid labels.")
     
     return problem_files
+
 
 def visualize_slice(x, y, slice_idx=None, pred=None):
     """
@@ -345,6 +586,7 @@ def visualize_slice(x, y, slice_idx=None, pred=None):
     
     plt.tight_layout()
     plt.show()
+
 
 def visualize_prediction_3d(x, y_true, y_pred, threshold=0.5):
     """

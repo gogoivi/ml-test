@@ -403,11 +403,9 @@ def _compute_single_topo_cached(args):
     """Modified to accept pre-computed target persistence"""
     pred, target_persistence, batch_idx, class_idx = args
     
-    # Threshold to find topological structure LOCATIONS
     pred_binary = (pred > 0.5).astype(float)
     pred_persistence = get_persistence_info(pred_binary)
     
-    # FIX: Replace binary values (0/1) with continuous values from original pred
     for p in pred_persistence:
         p['birth_value'] = pred[p['birth_coords']]
         if p['death_coords'] is not None:
