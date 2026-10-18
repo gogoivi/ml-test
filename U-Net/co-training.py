@@ -49,14 +49,43 @@ class CoTrainer:
         self.model_b = model_b 
         self.pseudo_labels = {}  # Track pseudo-labels
         self.thresholds=thresholds
+        self.stagnation=stagnation
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.train_loader,self.train_loader_no_aug,self.test_loader=get_dataloader_func(root_dir=ROOT_DIR,batch_size=batch_size,pseudo_labels=self.pseudo_labels)
-        
-    def train_epoch(self):
-        for batch, (X,y,idx) in enumerate(self.train_loader):
-            X=X.to(self.device)
-            y=y.to(self.device)
 
+    def train(self, total_epochs=100, warmup_epochs=10, update_frequency=5):
+        self.model_a.to(self.device)
+        self.model_b.to(self.device)
+        count=0
+        pseudo_mode=False
+
+        for epoch in range(total_epochs):
+            
+            for batch, (X,y,idx) in enumerate(self.train_loader):
+                #normal training (no pseudo)
+                X=X.to(self.device)
+                y=y.to(self.device)
+
+            if pseudo_mode: #If it stagnated and pseudo_mode is on then it adds pseudo_labels
+                self.update_all_pseudo_labels()
+                    
+            
+            if epoch%update_frequency==0:
+                #If it is on update frequency perform loss calculations
+                self.model_a.eval()
+                self.model_b.eval()
+
+                #iterate through test loader and if the new loss is less than prev loss then count is set back to 0, otherwise count increments by 1 
+                # (using compute loss function I made to make the code cleaner)
+                for batch,(X,y,idx) in enumerate(self.test_loader):
+                    
+                    if count>=self.stagnation and not pseudo_mode:
+                        pseudo_mode=True
+
+            #Figure out logging
+
+    def compute_loss(self,warmup_epochs,pred,gt):
+        # TODO loss computation etc
 
     def generate_pseudo_labels(self, sample_idx, pred_a, pred_b, gt):
         """
