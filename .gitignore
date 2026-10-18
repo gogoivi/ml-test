@@ -15,6 +15,8 @@ GAN_models/
 
 # Training output
 runs/
+heldout_labels_82_18/
+predictions_82_18/
 
 # Data
 data/
