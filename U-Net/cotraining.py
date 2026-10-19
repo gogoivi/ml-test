@@ -284,7 +284,7 @@ class CoTrainer:
             path = self.save_dir / f"model_{model_name}_best.pt"
             torch.save(checkpoint, path)
 
-    def log_metrics(self, epoch, train_dict_a, train_dict_b, dice_a, dice_b, val_loss_a, val_loss_b, pseudo_count):
+    def log_metrics(self, epoch, train_dict_a, train_dict_b, dice_a, dice_b, val_loss_a, val_loss_b, pseudo_stats):
         """Log metrics to TensorBoard and console. (Also claude - will change to work with unspecified num classes later - this is just for test    )"""
         
         # TensorBoard
@@ -296,15 +296,20 @@ class CoTrainer:
         self.writer.add_scalar('Val/Dice_Nerve_B', dice_b[1], epoch)
         self.writer.add_scalar('Val/Dice_Vessel_A', dice_a[2], epoch)
         self.writer.add_scalar('Val/Dice_Vessel_B', dice_b[2], epoch)
-        self.writer.add_scalar('PseudoLabels/Count', pseudo_count, epoch)
+        # Add voxel-level pseudo-label logging
+        self.writer.add_scalar('PseudoLabels/Samples', pseudo_stats['samples'], epoch)
+        self.writer.add_scalar('PseudoLabels/TotalVoxels', pseudo_stats['total_voxels'], epoch)
+        self.writer.add_scalar('PseudoLabels/NerveVoxels', pseudo_stats['nerve_voxels'], epoch)
+        self.writer.add_scalar('PseudoLabels/VesselVoxels', pseudo_stats['vessel_voxels'], epoch)
         
-        # Console
+        # Console 
+        print(f"  Pseudo-labels: {pseudo_stats['samples']} samples, "
+            f"{pseudo_stats['total_voxels']} voxels (N: {pseudo_stats['nerve_voxels']}, V: {pseudo_stats['vessel_voxels']})")
         print(f"\nEpoch {epoch}:")
         print(f"  Model A - Train: {train_dict_a['total']:.4f} | Val: {val_loss_a:.4f} | "
               f"Dice N: {dice_a[1]:.4f} V: {dice_a[2]:.4f}")
         print(f"  Model B - Train: {train_dict_b['total']:.4f} | Val: {val_loss_b:.4f} | "
               f"Dice N: {dice_b[1]:.4f} V: {dice_b[2]:.4f}")
-        print(f"  Pseudo-labels: {pseudo_count} samples")
 
     def count_pseudo_labels(self):
         """Count total pseudo-labeled pixels."""
@@ -374,7 +379,7 @@ class CoTrainer:
                 # Logs
                 pseudo_count = len(self.pseudo_labels)
                 self.log_metrics(epoch, train_dict_a, train_dict_b, dice_a, dice_b, 
-                               val_loss_a, val_loss_b, pseudo_count)
+                               val_loss_a, val_loss_b,self.get_pseudo_label_stats())
                 
                 # Save latest models
                 self.save_checkpoint(epoch, 'a', is_best=False)
@@ -481,3 +486,29 @@ class CoTrainer:
 
         
         return y_merged
+
+    def get_pseudo_label_stats(self):
+        """Get detailed pseudo-label statistics."""
+        num_samples = len(self.pseudo_labels)
+        
+        if num_samples == 0:
+            return {'samples': 0, 'total_voxels': 0, 'nerve_voxels': 0, 'vessel_voxels': 0}
+        
+        total_voxels = 0
+        nerve_voxels = 0
+        vessel_voxels = 0
+        
+        for sample_idx, pseudo in self.pseudo_labels.items():
+            mask = pseudo['mask']
+            classes = pseudo['classes']
+            
+            total_voxels += mask.sum().item()
+            nerve_voxels += ((mask) & (classes == 1)).sum().item()
+            vessel_voxels += ((mask) & (classes == 2)).sum().item()
+        
+        return {
+            'samples': num_samples,
+            'total_voxels': total_voxels,
+            'nerve_voxels': nerve_voxels,
+            'vessel_voxels': vessel_voxels
+        }
