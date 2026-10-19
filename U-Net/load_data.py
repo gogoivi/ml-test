@@ -237,7 +237,7 @@ class MRIDataset(Dataset):
         self.augment = augment
         self.file_type = file_type
         self.dataset_name = dataset_name
-        self.pseudo_labels = pseudo_labels if pseudo_labels is not None else {}
+        self.pseudo_labels = pseudo_labels
         
         
         # Augmentation pipeline
@@ -398,15 +398,17 @@ class MRIDataset(Dataset):
         # Convert to tensors
         x = torch.from_numpy(x)
         y = torch.from_numpy(y)
-        # Merge pseudo-labels (before augmentation)
-        if idx in self.pseudo_labels:        
-            pseudo = self.pseudo_labels[idx]
-            
-            # Where we have pseudo-labels AND gt is background
-            apply_mask = pseudo['mask'] & (y == 0)
-            
-            # Override labels
-            y[apply_mask] = pseudo['classes'][apply_mask]
+
+        if self.pseudo_labels is not None:
+            # Merge pseudo-labels (before augmentation)
+            if idx in self.pseudo_labels:        
+                pseudo = self.pseudo_labels[idx]
+                
+                # Where we have pseudo-labels AND gt is background
+                apply_mask = pseudo['mask'] & (y == 0)
+                
+                # Override labels
+                y[apply_mask] = pseudo['classes'][apply_mask]
     
         # Apply augmentation
         if self.augment:
@@ -417,8 +419,11 @@ class MRIDataset(Dataset):
         
         if self.transform:
             x, y = self.transform(x, y)
-        
-        return x, y,idx
+
+        if self.pseudo_labels is not None:
+            return x, y,idx
+        else:
+            return x,y
 
 
 def get_dataloaders(root_dir, batch_size=20, train_split=0.8, num_workers=0, transform=None, file_type='all', dataset_name="Dataset001_MRI",pseudo_labels=None):
@@ -437,9 +442,9 @@ def get_dataloaders(root_dir, batch_size=20, train_split=0.8, num_workers=0, tra
     test_indices = indices[train_size:]
     
     # Create separate datasets with/without augmentation
-    train_dataset = MRIDataset(..., augment=True, pseudo_labels=pseudo_labels)
-    train_no_aug_dataset=MRIDataset(...,augment=False,pseudo_labels=pseudo_labels)
-    test_dataset = MRIDataset(..., augment=False, pseudo_labels=pseudo_labels)
+    train_dataset = MRIDataset(root_dir=root_dir, augment=True, pseudo_labels=pseudo_labels)
+    train_no_aug_dataset=MRIDataset(root_dir=root_dir,augment=False,pseudo_labels=pseudo_labels)
+    test_dataset = MRIDataset(root_dir=root_dir, augment=False, pseudo_labels=pseudo_labels)
     
     # Use Subset to apply the split
     train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
@@ -467,7 +472,7 @@ def get_dataloaders(root_dir, batch_size=20, train_split=0.8, num_workers=0, tra
         shuffle=False,
         num_workers=num_workers,
     )
-    if pseudo_labels:
+    if pseudo_labels is not None:
         return train_loader, train_no_aug_loader,test_loader
     else:
         return train_loader,test_loader

@@ -12,6 +12,7 @@ __pycache__/
 U-Net_models/
 VAE_models/
 GAN_models/
+checkpoints/
 
 # Training output
 runs/

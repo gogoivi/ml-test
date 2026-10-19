@@ -125,6 +125,8 @@ def load_model(checkpoint_path, size=48, num_classes=3, kernel_size=3, device='c
     Returns:
         Loaded model in eval mode
     """
+    print(f"  load_model: checking path exists...")
+    print(f"  Exists: {os.path.exists(checkpoint_path)}")
     # Load checkpoint
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
@@ -143,7 +145,8 @@ def load_model(checkpoint_path, size=48, num_classes=3, kernel_size=3, device='c
     # Print checkpoint info
     print(f"Loaded model from: {checkpoint_path}")
     print(f"  Epoch: {checkpoint.get('epoch', 'unknown')}")
-    print(f"  Val loss: {checkpoint.get('val_loss', 'unknown'):.4f}" if 'val_loss' in checkpoint else "")
+    if 'val_loss' in checkpoint:
+        print(f"  Val loss: {checkpoint['val_loss']:.4f}")
     if 'metrics' in checkpoint:
         metrics = checkpoint['metrics']
         print(f"  Dice class 1: {metrics.get('dice_class_1', 'N/A'):.4f}")
@@ -232,11 +235,12 @@ def compute_dice(pred, target, class_id):
 
 def main():
     """Main function to load model, run inference on random samples, and visualize."""
-    
+    SEED = 0
+    random.seed(SEED)
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261012_234358\20261013_003318_CE_Dice_clDice\checkpoints\best_model.pth",
+        'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261018_184359\20261019_021723_CE_Dice_clDice_TopoNonDiff\checkpoints\best_model.pth",
         'data_root': r"C:\Users\gogoi\Desktop\ml-test\2023 Patients",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
         'num_samples': 3,    # How many random samples to visualize
@@ -249,8 +253,8 @@ def main():
         
         # Post-processing settings
         'vessel_min_size': 50,  # Minimum voxels for vessel components
+
     }
-    
     print("="*60)
     print("MODEL INFERENCE AND VISUALIZATION")
     print("="*60)

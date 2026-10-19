@@ -13,4 +13,4 @@ Other option is to make boundary box around where the vessels extend to and decr
 
 (Effects - addressing undersegmenting, incomplete data, not enough data etc)
 
--Also find a metric that is appropriate for incomplete segs
+-Also find a metric that is appropriate for incomplete segs -Since right now the vali loss will go up with pseudo labels - since  the pseudo labels will train the model to predict all the vessels around this not just the ones that are segmented in the ground truth
