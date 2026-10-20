@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from monai.losses import DiceLoss
-from loss_fn import TopologyAwareLoss
+from loss_fn import TopologyAwareLoss, Cubical_Complex_Loss_Differentiable
 from modified_cldice_3d import soft_cldice_loss
 from load_data import compute_class_weights
 from datetime import datetime
@@ -327,6 +327,7 @@ class CoTrainer:
         
         # Initialize topo loss with warmup
         self.topo_loss_fn = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
+        # self.topo_loss_fn=Cubical_Complex_Loss_Differentiable(warmup_epochs=warmup_epochs)
         
         # Tracking
         stagnation_count = 0
