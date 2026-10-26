@@ -112,26 +112,51 @@ class CoTrainer:
         self.best_metric_b = float('inf')
         self.global_step = 0
 
-    def compute_loss(self, pred, gt, epoch, warmup_epochs):
+    # def compute_loss(self, pred, gt, epoch, warmup_epochs):
+    #     """
+    #     Compute best loss from individual analysis (CE + Dice + clDice + Non-diff Topo)
+    #     """
+    #     ce_loss = self.ce_loss_fn(pred, gt)
+    #     dice_loss = self.dice_loss_fn(pred, gt.unsqueeze(1))
+    #     cldice_loss = soft_cldice_loss(pred, gt)
+
+    #     # For topo loss - will return 1 until it gets to after warmup epochs - then it will output a scaling factor for the base loss - in this case CE + Dice + clDice
+    #     topo_mult = self.topo_loss_fn(pred, gt, epoch, N=warmup_epochs)
+        
+    #     # Combining loss - using arbitrary weights
+    #     base_loss = ce_loss + dice_loss + 0.5 * cldice_loss
+    #     # total_loss = base_loss * topo_mult
+    #     total_loss = base_loss * topo_mult
+        
+    #     loss_dict = {
+    #         'ce': ce_loss.item(),
+    #         'dice': dice_loss.item(),
+    #         'cldice': cldice_loss.item(),
+    #         'topo_mult': topo_mult.item() if torch.is_tensor(topo_mult) else topo_mult,
+    #         'total': total_loss.item()
+    #     }
+        
+    #     return total_loss, loss_dict
+
+    def compute_loss(self, pred, gt, epoch, warmup_epochs,lam=1e-3):
         """
-        Compute best loss from individual analysis (CE + Dice + clDice + Non-diff Topo)
+        Compute best loss from individual analysis (CE + Dice + clDice + Diff Topo)
         """
         ce_loss = self.ce_loss_fn(pred, gt)
         dice_loss = self.dice_loss_fn(pred, gt.unsqueeze(1))
         cldice_loss = soft_cldice_loss(pred, gt)
 
-        # For topo loss - will return 1 until it gets to after warmup epochs - then it will output a scaling factor for the base loss - in this case CE + Dice + clDice
-        topo_mult = self.topo_loss_fn(pred, gt, epoch, N=warmup_epochs)
+        topo_loss, topo_log = self.topo_loss_fn(pred, gt, epoch)
         
         # Combining loss - using arbitrary weights
         base_loss = ce_loss + dice_loss + 0.5 * cldice_loss
-        total_loss = base_loss * topo_mult
+        total_loss = base_loss + lam * topo_loss
         
         loss_dict = {
             'ce': ce_loss.item(),
             'dice': dice_loss.item(),
             'cldice': cldice_loss.item(),
-            'topo_mult': topo_mult.item() if torch.is_tensor(topo_mult) else topo_mult,
+            'topo': topo_log,
             'total': total_loss.item()
         }
         
@@ -331,8 +356,8 @@ class CoTrainer:
         self.model_b.to(self.device)
         
         # Initialize topo loss with warmup
-        self.topo_loss_fn = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
-        # self.topo_loss_fn=Cubical_Complex_Loss_Differentiable(warmup_epochs=warmup_epochs)
+        # self.topo_loss_fn = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
+        self.topo_loss_fn=Cubical_Complex_Loss_Differentiable(warmup_epochs=warmup_epochs)
         
         # Tracking
         stagnation_count = 0

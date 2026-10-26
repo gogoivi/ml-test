@@ -35,3 +35,7 @@ env/
 overnight.py
 
 tensorboard/
+
+#  Get rid on non u-net stuff
+GAN/
+VAE/

@@ -139,9 +139,7 @@ if __name__=="__main__":
             batch_size = X.shape[0]
             train_loss_sum += loss.item() * batch_size
             train_sample_count += batch_size
-            
-
-            
+                  
 
         if i%3==0 and i>warmup_epochs:
             u_net.eval()

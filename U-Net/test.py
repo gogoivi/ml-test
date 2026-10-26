@@ -48,7 +48,7 @@ trainer = CoTrainer(
     lr_b=1e-3,
     thresholds=[0.99, 0.95],
     stagnation_patience=2,
-    experiment_name="Rips_Mult_TopoLoss"
+    experiment_name="Cubical_TopoLoss" 
 )
 
 # Link the shared dict
