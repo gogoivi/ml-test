@@ -245,9 +245,9 @@ def main():
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261018_184359\20261019_021723_CE_Dice_clDice_TopoNonDiff\checkpoints\best_model.pth",
-        'data_root': r"C:\Users\gogoi\Desktop\ml-test\2023 Patients",
-        'output_dir': r"C:\Users\gogoi\Desktop\ml-test\inference_results",
+        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Cubical_TopoLoss(300 epochs)_20261026_083611/model_a_best.pt",
+        'data_root': r"/home/vgogoi1/projects/TN_Research/2023 Patients",
+        'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
         'num_samples': 3,    # How many random samples to process
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',

@@ -35,7 +35,6 @@ env/
 overnight.py
 
 tensorboard/
-
+inference_results/
 #  Get rid on non u-net stuff
-GAN/
-VAE/
+*.log

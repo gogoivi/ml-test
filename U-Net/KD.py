@@ -1,8 +1,7 @@
 import torch
-from model import U_Net,U_Netx2
+from model import U_Net
 import torchvision
 from torchvision.transforms import ToTensor
-from tqdm import tqdm
 from torch import nn
 from pathlib import Path
 from torch.utils.data import Dataset
@@ -15,177 +14,108 @@ from loss_fn import TopologyAwareLoss
 import numpy as np
 from torch.amp import autocast, GradScaler
 from datetime import datetime
-from monai.networks.nets import SegResNet
 from modified_cldice_3d import soft_cldice_loss
+import torch.nn.functional as F
+from loss_fn import merge
+from model import U_Net,U_Net_small
 
-
-def save_model(model: torch.nn.Module, target_dir: str, model_name: str):
-    target_dir_path = Path(target_dir)
-    target_dir_path.mkdir(parents=True, exist_ok=True)
-    
-    save_path = target_dir_path / model_name
-    torch.save(model.state_dict(), save_path)
-
-
+# Constants
 size=48
 epochs=120
 batch_size=20
 kernel_size=3
-U_Net_Name="U_Net(Topo_Loss_clDice)"
-warmup_epochs=10
-lr=0.0005
-timestamp = datetime.now().strftime("%m%d_%H%M")
-# How many to skip before topo loss starts
-N=2
+root_dir=r""
+path_model_a=""
+path_model_b=""
+T=1 #temperature
+alpha=0.5
 
-# Patience counter idea was claude
-best_val_loss = float('inf')
-patience = 9  # Stop if no improvement for 9 eval cycles (27 epochs)
-patience_counter = 0
-best_model_name=""
-target_dir = "U-Net_models"
+# Setup random seed
+RANDOM_SEED = 42
 
-# Copied from some of my previously written code
-if __name__=="__main__":
-    scaler = GradScaler()
-    # Create writer (logs to ./runs folder)
-    run_name = f"runs/{timestamp}_{U_Net_Name}_lr{lr}_bs{batch_size}"
-    writer = SummaryWriter(log_dir=run_name)
+torch.manual_seed(RANDOM_SEED)
+torch.cuda.manual_seed(RANDOM_SEED)
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    ROOT_DIR = r"C:\Users\gogoi\Desktop\ml-test\2023 Patients"
-    # Setup random seed
-    RANDOM_SEED = 42
+# Model Declaration
+teacher_a = U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
+teacher_b = U_Net_small(size=size,classes=3,color=False,kernel_size=kernel_size)
+# Loaded best pseudo labeled models
+a_dict=torch.load(path_model_a)
+a_dict=a_dict['model_state_dict']
+b_dict=torch.load(path_model_b)
+b_dict=b_dict['model_state_dict']
+teacher_a.load_state_dict(a_dict)
+teacher_b.load_state_dict(b_dict)
+teacher_a.eval()
+teacher_b.eval()
+for param in teacher_a.parameters():
+    param.requires_grad = False
+for param in teacher_b.parameters():
+    param.requires_grad = False
+student=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
+teacher_a.to(device)
+teacher_b.to(device)
+student.to(device)
 
-    torch.manual_seed(RANDOM_SEED)
-    torch.cuda.manual_seed(RANDOM_SEED)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+transform=torchvision.transforms.Compose([
+    torchvision.transforms.Resize((size,size)),
+    torchvision.transforms.ToTensor()
+])
 
-    transform=torchvision.transforms.Compose([
-        torchvision.transforms.Resize((size,size)),
-        torchvision.transforms.ToTensor()
-    ])
+weights = compute_class_weights(root_dir, num_classes=3)
 
-    weights = compute_class_weights(ROOT_DIR, num_classes=3)
+# Create dataloaders
+train_dataloader, test_dataloader = get_dataloaders(root_dir, batch_size=2)
 
-    # Create dataloaders
-    train_dataloader, test_dataloader = get_dataloaders(ROOT_DIR, batch_size=2)
+optimizer=torch.optim.Adamax(params=student.parameters(),lr=lr,weight_decay=1e-5)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode='min', patience=5, factor=0.5
+)
 
-    u_net=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
-    # u_net=U_Netx2(size=size,classes=3,color=False,kernel_size=kernel_size)
-    # u_net = SegResNet(
-    #     spatial_dims=3,
-    #     in_channels=1,
-    #     out_channels=3,
-    #     init_filters=32,
-    #     blocks_down=(1, 2, 2, 4),
-    #     blocks_up=(1, 1, 1),
-    # ).to(device)
-    u_net.to(device)
+CE_Loss=nn.CrossEntropyLoss(weight=weights)
 
-    optimizer=torch.optim.Adamax(params=u_net.parameters(),lr=lr,weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=5, factor=0.5
-    )
-    loss_fn=nn.CrossEntropyLoss(weight=weights.to(device),ignore_index=3)  # [background, nerve,vessel]
-    dice_loss_3d = DiceLoss(
-        include_background=False,
-        to_onehot_y=True,
-        softmax=True,
-        smooth_nr=1e-5,
-        smooth_dr=1e-5
-    )
-    topo_loss = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
+dice_loss_3d = DiceLoss(
+    include_background=False,
+    to_onehot_y=False,
+    softmax=True,
+    smooth_nr=1e-5,
+    smooth_dr=1e-5
+)
+topo_loss = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
 
-    for i in tqdm(range(epochs)):
-        u_net.train()
-        train_loss_sum=0
-        train_sample_count=0
-        for batch, (X,y,idx) in enumerate(train_dataloader):
-            X=X.to(device)
-            y=y.to(device)
-            with autocast(device_type=device):
-                x_pred=u_net(X)
-                ce_loss=loss_fn(x_pred,y)
-                dice_loss=dice_loss_3d(x_pred,y.unsqueeze(1))+soft_cldice_loss(x_pred,y)
-            T_loss=topo_loss(x_pred, y, i, N=N)
 
-            # Check for problems BEFORE they become NaN
-            if ce_loss.item() > 100:
-                print("  WARNING: CE loss spiking!")
-            if dice_loss.item() > 10:
-                print("  WARNING: Dice loss spiking!")
-            if T_loss > 10:
-                print("  WARNING: Omega spiking!")
+#Loss fn basic idea (x is dataloader output)
+#Not sure if I have to softmax?
+with torch.no_grad():
+    teacher_logits_a = teacher_a(x)
+    teacher_logits_b = teacher_b(x)
 
-            loss = (ce_loss + dice_loss) * T_loss
+# Should also make it so teacher logits and softmax both use y if they both agree (eg it is at 100% for that class if they agree - and same thing if y is anything except background - but if gt says background then use teacher logits instead)
+#  This should become the new gt that everything uses - except for the hard loss (needs grounding in original gt)
 
-            if torch.isnan(loss):
-                print("  >>> LOSS IS NAN <<<")
-                print(f"  CE nan: {torch.isnan(ce_loss)}")
-                print(f"  Dice nan: {torch.isnan(dice_loss)}")
-                print(f"  Omega nan or inf: {np.isnan(T_loss) or np.isinf(T_loss)}")
-                raise ValueError("NaN detected - stopping to debug")
-            
-            optimizer.zero_grad()
-            # loss.backward()
-            # torch.nn.utils.clip_grad_norm_(u_net.parameters(), max_norm=1.0)
-            # optimizer.step()
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(u_net.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
+#Pred value: X Batch 3 channel 48^3 img
+student_logits=student(x)
 
-            batch_size = X.shape[0]
-            train_loss_sum += loss.item() * batch_size
-            train_sample_count += batch_size
-            
+studentlog_prob = F.log_softmax(student_logits / T, dim=1)   # log-probabilities
+teacher_prob_a = F.softmax(teacher_logits_a / T, dim=1)    # probabilities
+teacher_prob_b=F.softmax(teacher_logits_b / T,dim=1)
+soft_y,hard_y=merge(y,teacher_prob_a,teacher_prob_b,[0.8,0.8])
 
-            
+kl_loss=F.kl_div(studentlog_prob,soft_y,reduction='batchmean')*T*T # Since the KD paper says to mult by T^2
 
-        if i%3==0 and i>warmup_epochs:
-            u_net.eval()
-            with torch.no_grad():
-                sample_count = 0
-                loss_sum=0
-                for (X,y,idx) in test_dataloader:
-                    X=X.to(device)
-                    y=y.to(device)
-                    with autocast(device_type=device):
-                        x_pred=u_net(X)
-                        ce_loss=loss_fn(x_pred,y)
-                        dice_loss=dice_loss_3d(x_pred,y.unsqueeze(1))+soft_cldice_loss(x_pred,y)
-                        loss = (ce_loss + dice_loss)
-                    batch_size = X.shape[0]
-                    loss_sum += loss.item() * batch_size
-                    sample_count += batch_size
-            print(f"Epoch {i}, Batch {batch}")
-            print(f"  CE: {ce_loss.item():.6f}")
-            print(f"  Dice: {dice_loss.item():.6f}")
-            print(f"  Pred min/max: {x_pred.min().item():.4f} / {x_pred.max().item():.4f}")
-            train_loss=train_loss_sum/train_sample_count
-            val_loss = loss_sum / sample_count
-            scheduler.step(val_loss)
-            writer.add_scalar('Loss/train', train_loss, i)
-            writer.add_scalar('Loss/val', val_loss, i)
-            writer.add_scalar('LR', optimizer.param_groups[0]['lr'], i)  # Track LR too
+soft_loss=(1-alpha)*(kl_loss+soft_cldice_loss(student_logits,soft_y,class_weights=weights)+topo_loss(student_logits,hard_y))
+hard_loss=(alpha)*(CE_Loss(student_logits,y)+soft_cldice_loss(student_logits,y,class_weights=weights)+topo_loss(student_logits,y)) 
 
-            if val_loss<best_val_loss:
-                best_val_loss=val_loss
-                patience_counter=0
-                save_model(model=u_net,target_dir="U-Net_models",model_name=f"MRI_{U_Net_Name}_E{i}_K{kernel_size}")
-                best_model_name=f"MRI_{U_Net_Name}_E{i}_K{kernel_size}"
-            else:
-                patience_counter+=1
-                if patience_counter>patience:
-                    print(f"Stopping at Epoch {i}")
-                    break
 
-    file_path = os.path.join(target_dir, best_model_name)
-    # Using best model
-    u_net.load_state_dict(torch.load(file_path))
 
-    #  Claude Function
-    from load_data import evaluate_and_visualize
 
-    evaluate_and_visualize(u_net, test_dataloader, device, num_samples=3)
+
+
+
+
+
+
+
+
+

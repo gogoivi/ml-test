@@ -19,7 +19,7 @@ epochs=120
 batch_size=20
 kernel_size=3
 # VERIFY: Adjust paths and hyperparameters
-ROOT_DIR = "C:/Users/gogoi/Desktop/ml-test/2023 Patients"
+ROOT_DIR = "/home/vgogoi1/projects/TN_Research/2023 Patients"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Initialize pseudo_labels dict FIRST
@@ -47,12 +47,12 @@ trainer = CoTrainer(
     lr_a=1e-4,
     lr_b=1e-3,
     thresholds=[0.99, 0.95],
-    stagnation_patience=2,
-    experiment_name="Cubical_TopoLoss" 
+    stagnation_patience=6,
+    experiment_name="Rips_TopoLoss(300 epochs)" 
 )
 
 # Link the shared dict
 trainer.pseudo_labels = pseudo_labels
 
 # Train
-trainer.train(total_epochs=150, warmup_epochs=10, update_frequency=3)
+trainer.train(total_epochs=300, warmup_epochs=15, update_frequency=1)

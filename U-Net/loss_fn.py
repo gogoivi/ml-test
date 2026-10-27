@@ -422,3 +422,83 @@ def _compute_single_topo_cached(args):
         'log_value': logging_value
     }
 
+# Trying to use pytorch topolgical instad - to replace the inhouse loss fns
+from torch_topological.nn import VietorisRipsComplex,WassersteinDistance,CubicalComplex
+
+import torch.nn as nn
+
+def merge(gt,pred_gt_a,pred_gt_b,thresh):
+    """
+    Merge gives a combined gt - for all gt not background it uses the gt value at prob 100% at that point
+    - at points where gt is background if avg prob > thresh for that class then it preserves probs at that temp
+    - if avg prob  < thres then background
+    
+    :param gt: Partial Annotation Ground truth of format [B,1,D,H,W]
+    :param pred_gt_a: Prediction probs from model A - format [B,C,D,H,W]
+    :param pred_gt_b: Prediction probs from model B - format [B,C,D,H,W]
+    :param thresh: List that has the threshold for each non-background class
+
+    Returns:
+        hard_y: y - if avg prob above 80 pct (or some num) then uses that as the class form [B,1,D,H,W]
+        soft_y: Merged y using the rules in descr, returns obj of dim [B,C,D,H,W]
+    """
+    with torch.no_grad():
+        pred_gt=(pred_gt_a+pred_gt_b)/2
+        if gt.ndim !=5:
+            raise ValueError("Ground truth should be of format [B,C,D,H,W] or [B,1,D,H,W]")
+
+        B, C, D, H, W = pred_gt.shape
+        
+        if gt.shape[1]==1:
+            labels=gt[:,0].long()
+        else:
+            labels=gt.argmax(dim=1)
+        
+        labels=labels.to(pred_gt_a.device) #move to gpu
+
+        known = labels !=0 #if label isnt background we ensure that the prob of that class is 100%
+        unknown = ~known #unknown is opposite of known
+        soft_y=torch.zeros_like(pred_gt)
+        hard_y=labels.clone()
+
+        any_confident = torch.zeros(B, D, H, W, dtype=torch.bool, device=pred_gt.device)
+        for i in range(C - 1):
+            any_confident |= (pred_gt[:, i+1] > thresh[i]) #Append anything that is above that thresh for any class except for background
+
+        pseudo_mask = unknown & any_confident  # [B, D, H, W]
+
+        for i in range(C):
+            soft_y[:, i][pseudo_mask] = pred_gt[:, i][pseudo_mask] #Add pred distributions for anything above threshold and unknown
+
+        remaining = unknown & (~any_confident) #If none of these it is background
+        soft_y[:, 0][remaining] = 1.0  # background 100%
+
+        max_probs, max_classes = pred_gt.max(dim=1)  # [B, D, H, W] each
+        confident_unknown = unknown & (max_probs > 0.8)
+        hard_y[confident_unknown] = max_classes[confident_unknown]
+
+        return soft_y,hard_y
+    
+
+class Rips_Loss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.rips=VietorisRipsComplex(dim=2,keep_infinite_features=True)
+        self.wd=WassersteinDistance()
+    def forward(self,pred,gt):
+        """
+        :param pred: prediction of format [B,3,D,H,W]
+        :param gt: Ground truth of either format [B,1,D,H,W] or [B,3,D,H,W]
+        """
+
+class CC_Loss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cc=CubicalComplex(dim=3,superlevel=True) #Xioling Hu Paper talks about using superlevel (makes sense go from high to low confidence and dies at low conf)
+        self.wd=WassersteinDistance()
+
+    def forward(self,pred,gt):
+        """
+        :param pred: prediction of format [B,3,D,H,W]
+        :param gt: Ground truth of either format [B,1,D,H,W] or [B,3,D,H,W]
+        """
