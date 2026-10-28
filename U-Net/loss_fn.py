@@ -433,26 +433,31 @@ def merge(gt,pred_gt_a,pred_gt_b,thresh):
     - at points where gt is background if avg prob > thresh for that class then it preserves probs at that temp
     - if avg prob  < thres then background
     
-    :param gt: Partial Annotation Ground truth of format [B,1,D,H,W]
+    :param gt: Partial Annotation Ground truth of format [B,1,D,H,W] or [B,D,H,W]
     :param pred_gt_a: Prediction probs from model A - format [B,C,D,H,W]
     :param pred_gt_b: Prediction probs from model B - format [B,C,D,H,W]
     :param thresh: List that has the threshold for each non-background class
 
     Returns:
-        hard_y: y - if avg prob above 80 pct (or some num) then uses that as the class form [B,1,D,H,W]
+        hard_y: y - if avg prob above 80 pct (or some num) then uses that as the class form [B,D,H,W]
         soft_y: Merged y using the rules in descr, returns obj of dim [B,C,D,H,W]
     """
     with torch.no_grad():
         pred_gt=(pred_gt_a+pred_gt_b)/2
-        if gt.ndim !=5:
-            raise ValueError("Ground truth should be of format [B,C,D,H,W] or [B,1,D,H,W]")
 
         B, C, D, H, W = pred_gt.shape
         
-        if gt.shape[1]==1:
-            labels=gt[:,0].long()
+        if gt.ndim == 5 and gt.shape[1] == 1:
+            labels = gt[:, 0].long()
+        elif gt.ndim == 4:
+            labels = gt.long()
+        elif gt.ndim == 5 and gt.shape[1] > 1:
+            labels = gt.argmax(dim=1)
         else:
-            labels=gt.argmax(dim=1)
+            raise ValueError(
+                f"Ground truth has shape {gt.shape}. "
+                f"Needs to be [B,D,H,W] or [B,1,D,H,W]"
+            )
         
         labels=labels.to(pred_gt_a.device) #move to gpu
 
