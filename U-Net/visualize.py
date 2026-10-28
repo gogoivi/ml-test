@@ -245,7 +245,7 @@ def main():
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Cubical_TopoLoss(300 epochs)_20261026_083611/model_a_best.pt",
+        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/KD with CCTopoLossTeachers_20261028_014517/model_Student_best.pt",
         'data_root': r"/home/vgogoi1/projects/TN_Research/2023 Patients",
         'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'

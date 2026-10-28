@@ -352,12 +352,13 @@ def compute_topo_gradient(matches, prob_volume):
     return grad
 
 class Cubical_Complex_Loss_Differentiable(nn.Module):
-    def __init__(self, warmup_epochs: int = 25, classes_wo_background: int = 2, N: int = 1):
+    def __init__(self, warmup_epochs: int = 25, classes_wo_background: int = 2, N: int = 1,lam=1):
         super().__init__()
         self.warmup_epochs = warmup_epochs
         self.classes_wo_background = classes_wo_background
         self.N = N
         self._target_cache = {}  # Add cache
+        self.lam=lam
     
     def _get_cache_key(self, target_np):
         """Create hashable key from target array"""
@@ -396,7 +397,7 @@ class Cubical_Complex_Loss_Differentiable(nn.Module):
             logging_value += res['log_value']
 
         fake_loss = (x_soft * total_grad.detach()).sum()
-        return fake_loss, logging_value
+        return self.lam*fake_loss, self.lam*logging_value
 
 
 def _compute_single_topo_cached(args):
@@ -490,6 +491,7 @@ class Rips_Loss(nn.Module):
         super().__init__()
         self.rips=VietorisRipsComplex(dim=2,keep_infinite_features=True)
         self.wd=WassersteinDistance()
+
     def forward(self,pred,gt):
         """
         :param pred: prediction of format [B,3,D,H,W]
@@ -497,13 +499,40 @@ class Rips_Loss(nn.Module):
         """
 
 class CC_Loss(nn.Module):
-    def __init__(self):
+    def __init__(self,warmup_epochs:int=15):
         super().__init__()
         self.cc=CubicalComplex(dim=3,superlevel=True) #Xioling Hu Paper talks about using superlevel (makes sense go from high to low confidence and dies at low conf)
         self.wd=WassersteinDistance()
+        self.warmup_epochs=warmup_epochs
 
-    def forward(self,pred,gt):
+    def forward(self,pred,gt,epoch,lam=1e-3):
         """
         :param pred: prediction of format [B,3,D,H,W]
-        :param gt: Ground truth of either format [B,1,D,H,W] or [B,3,D,H,W]
+        :param gt: Ground truth of format [B,D,H,W]
         """
+        if epoch>self.warmup_epochs:
+            # total=pred.sum() * 0.0 Connect to graph
+            pred=F.softmax(pred,dim=1)
+            gt=gt.to(pred.device)
+            total = pred.sum() * 0.0
+            count = 0
+            for b in range(pred.shape[0]):
+                for cls in range(pred.shape[1]-1):
+                    cls+=1
+                    # Iterate through batch and class
+                    pred_field = pred[b, cls]
+
+                    # For the gt in that batch that are the right class
+                    gt_field = (gt[b] == cls).float()
+
+                    # Persistent homology
+                    pred_ph = self.cc(pred_field)
+
+                    with torch.no_grad():
+                        gt_ph = self.cc(gt_field)\
+                        
+                    total = total + self.wd(pred_ph, gt_ph)
+                    count += 1
+            return lam*(total/count)
+        else:
+            return 0
