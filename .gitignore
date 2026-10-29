@@ -38,3 +38,5 @@ tensorboard/
 inference_results/
 #  Get rid on non u-net stuff
 *.log
+
+NAPARI Viewer/
