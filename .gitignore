@@ -35,3 +35,5 @@ env/
 overnight.py
 
 tensorboard/
+
+NAPARI Viewer/

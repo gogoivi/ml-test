@@ -1,23 +1,17 @@
-"""
-Model Inference and Visualization Script
-Loads trained model, runs inference on random samples, applies post-processing,
-and visualizes each in separate napari viewer
-"""
-
 import os
 import numpy as np
 import torch
 import torch.nn.functional as F
-import napari
-from scipy.ndimage import label as scipy_label  # This is what connected_comps needs!
+import nibabel as nib
+from scipy.ndimage import label as scipy_label
 import random
+import json
+from datetime import datetime
 
 # Your imports - adjust paths as needed
 from model import U_Net
 from load_data import MRIDataset
 
-
-# ============== POST-PROCESSING FUNCTIONS ==============
 
 def connected_comps(array, class_value):
     """
@@ -184,37 +178,48 @@ def run_inference(model, image, device='cuda'):
     return pred_classes[0].cpu().numpy()  # (D, H, W)
 
 
-# ============== VISUALIZATION ==============
+# ============== FILE SAVING ==============
 
-def visualize_single_sample(image, ground_truth, pred_raw, pred_postproc, title="Sample"):
+def save_nifti(array, output_path):
     """
-    Open ONE napari viewer for a single sample.
-    
-    Shows 4 layers:
-    1. MRI image (grayscale)
-    2. Ground truth labels
-    3. Raw prediction (before post-processing)
-    4. Post-processed prediction
+    Save a 3D numpy array as a NIfTI file (.nii.gz).
     
     Args:
-        image: 3D array (D, H, W)
-        ground_truth: 3D label array (D, H, W)
-        pred_raw: Raw prediction (D, H, W)
-        pred_postproc: Post-processed prediction (D, H, W)
-        title: Window title
-    
-    Returns:
-        napari.Viewer instance
+        array: 3D numpy array (D, H, W)
+        output_path: Path to save (should end in .nii.gz)
     """
-    viewer = napari.Viewer(title=title)
+    nii = nib.Nifti1Image(array, affine=np.eye(4))
+    nib.save(nii, output_path)
+
+
+def save_sample_results(output_dir, sample_name, image_np, gt_np, pred_raw, pred_postproc):
+    """
+    Save all volumes for a single sample as NIfTI files in a grouped folder.
     
-    # Add layers
-    viewer.add_image(image, name='MRI', colormap='gray')
-    viewer.add_labels(ground_truth.astype(np.int32), name='Ground Truth', opacity=0.7)
-    viewer.add_labels(pred_raw.astype(np.int32), name='Prediction (Raw)', opacity=0.7, visible=False)
-    viewer.add_labels(pred_postproc.astype(np.int32), name='Prediction (Post-Processed)', opacity=0.7)
+    Creates:
+        output_dir/sample_name/
+            ├── image.nii.gz                    (preprocessed MRI)
+            ├── ground_truth.nii.gz             (labels)
+            ├── prediction_raw.nii.gz           (raw model output)
+            └── prediction_postprocessed.nii.gz (after post-processing)
     
-    return viewer
+    Args:
+        output_dir: Root output directory
+        sample_name: Name for this sample's folder
+        image_np: Preprocessed MRI (D, H, W) float32
+        gt_np: Ground truth labels (D, H, W) int
+        pred_raw: Raw prediction (D, H, W) int
+        pred_postproc: Post-processed prediction (D, H, W) int
+    """
+    sample_dir = os.path.join(output_dir, sample_name)
+    os.makedirs(sample_dir, exist_ok=True)
+    
+    save_nifti(image_np.astype(np.float32), os.path.join(sample_dir, "image.nii.gz"))
+    save_nifti(gt_np.astype(np.int16), os.path.join(sample_dir, "ground_truth.nii.gz"))
+    save_nifti(pred_raw.astype(np.int16), os.path.join(sample_dir, "prediction_raw.nii.gz"))
+    save_nifti(pred_postproc.astype(np.int16), os.path.join(sample_dir, "prediction_postprocessed.nii.gz"))
+    
+    print(f"  Saved 4 NIfTI files to: {sample_dir}")
 
 
 def compute_dice(pred, target, class_id):
@@ -234,7 +239,7 @@ def compute_dice(pred, target, class_id):
 # ============== MAIN ==============
 
 def main():
-    """Main function to load model, run inference on random samples, and visualize."""
+    """Main function to load model, run inference on random samples, and save results."""
     SEED = 0
     random.seed(SEED)
     # ============== CONFIGURATION ==============
@@ -242,8 +247,9 @@ def main():
     CONFIG = {
         'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261018_184359\20261019_021723_CE_Dice_clDice_TopoNonDiff\checkpoints\best_model.pth",
         'data_root': r"C:\Users\gogoi\Desktop\ml-test\2023 Patients",
+        'output_dir': r"C:\Users\gogoi\Desktop\ml-test\inference_results",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
-        'num_samples': 3,    # How many random samples to visualize
+        'num_samples': 3,    # How many random samples to process
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         
         # Model architecture (must match training!)
@@ -253,14 +259,20 @@ def main():
         
         # Post-processing settings
         'vessel_min_size': 50,  # Minimum voxels for vessel components
-
     }
-    print("="*60)
-    print("MODEL INFERENCE AND VISUALIZATION")
-    print("="*60)
+    
+    # Create timestamped output directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(CONFIG['output_dir'], f"run_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print("=" * 60)
+    print("MODEL INFERENCE AND RESULTS SAVING")
+    print("=" * 60)
     print(f"Device: {CONFIG['device']}")
     print(f"Data: {CONFIG['file_type']}")
-    print(f"Samples to view: {CONFIG['num_samples']}")
+    print(f"Samples to process: {CONFIG['num_samples']}")
+    print(f"Output directory: {output_dir}")
     print()
     
     # ============== LOAD MODEL ==============
@@ -291,24 +303,21 @@ def main():
     print()
     
     # ============== PROCESS EACH SAMPLE ==============
-    viewers = []  # Store viewers so they don't get garbage collected
+    all_metrics = []
     
     for i, idx in enumerate(random_indices):
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"SAMPLE {i+1}/{num_samples} (Dataset index: {idx})")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         
         # Get sample info
         input_path, target_path, file_type = dataset.samples[idx]
-        sample_name = os.path.basename(input_path)
+        sample_name = os.path.basename(input_path).replace('.nii.gz', '').replace('.tiff', '').replace('.tif', '')
         print(f"  File: {sample_name}")
         print(f"  Type: {file_type}")
         
-        # Load sample
         image, ground_truth = dataset[idx]
         
-        # Convert to numpy for visualization
-        # image is (1, D, H, W), ground_truth is (D, H, W)
         image_np = image[0].numpy()  # Remove channel dim -> (D, H, W)
         gt_np = ground_truth.numpy()
         
@@ -343,29 +352,77 @@ def main():
         print(f"  {'Dice (post-proc)':20} {dice_nerve_post:>12.4f} {dice_vessel_post:>12.4f}")
         print()
         
-        # Open napari viewer (SEPARATE viewer for each sample)
-        viewer = visualize_single_sample(
-            image=image_np,
-            ground_truth=gt_np,
-            pred_raw=pred_raw,
-            pred_postproc=pred_postproc,
-            title=f"Sample {i+1}: {sample_name}"
-        )
-        viewers.append(viewer)
+        # Save NIfTI files
+        folder_name = f"sample_{i+1:03d}_{sample_name}"
+        save_sample_results(output_dir, folder_name, image_np, gt_np, pred_raw, pred_postproc)
+        
+        # Store metrics
+        sample_metrics = {
+            'sample_index': idx,
+            'sample_name': sample_name,
+            'file_type': file_type,
+            'folder_name': folder_name,
+            'gt_nerve_voxels': int((gt_np == 1).sum()),
+            'gt_vessel_voxels': int((gt_np == 2).sum()),
+            'raw_nerve_voxels': int((pred_raw == 1).sum()),
+            'raw_vessel_voxels': int((pred_raw == 2).sum()),
+            'postproc_nerve_voxels': int((pred_postproc == 1).sum()),
+            'postproc_vessel_voxels': int((pred_postproc == 2).sum()),
+            'dice_nerve_raw': round(dice_nerve_raw, 4),
+            'dice_vessel_raw': round(dice_vessel_raw, 4),
+            'dice_nerve_postproc': round(dice_nerve_post, 4),
+            'dice_vessel_postproc': round(dice_vessel_post, 4),
+        }
+        all_metrics.append(sample_metrics)
     
-    # ============== KEEP NAPARI RUNNING ==============
-    print("="*60)
-    print("VISUALIZATION COMPLETE")
-    print("="*60)
-    print(f"\nOpened {len(viewers)} napari viewers.")
-    print("Tips:")
-    print("  - Use scroll wheel to navigate through slices")
-    print("  - Toggle layer visibility with eye icon")
-    print("  - 'Raw Prediction' is hidden by default - click eye to show")
-    print("  - Close all windows to exit")
+    # ============== SAVE SUMMARY ==============
+    summary = {
+        'config': {
+            'checkpoint_path': CONFIG['checkpoint_path'],
+            'data_root': CONFIG['data_root'],
+            'file_type': CONFIG['file_type'],
+            'num_samples': num_samples,
+            'vessel_min_size': CONFIG['vessel_min_size'],
+            'seed': SEED,
+        },
+        'aggregate': {
+            'mean_dice_nerve_raw': round(np.mean([m['dice_nerve_raw'] for m in all_metrics]), 4),
+            'mean_dice_vessel_raw': round(np.mean([m['dice_vessel_raw'] for m in all_metrics]), 4),
+            'mean_dice_nerve_postproc': round(np.mean([m['dice_nerve_postproc'] for m in all_metrics]), 4),
+            'mean_dice_vessel_postproc': round(np.mean([m['dice_vessel_postproc'] for m in all_metrics]), 4),
+        },
+        'samples': all_metrics,
+    }
+    
+    summary_path = os.path.join(output_dir, "summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=4)
+    
+    # ============== PRINT FINAL SUMMARY ==============
+    print("=" * 60)
+    print("INFERENCE COMPLETE")
+    print("=" * 60)
+    print(f"\nResults saved to: {output_dir}")
+    print(f"Summary saved to: {summary_path}")
     print()
-    
-    napari.run()
+    print("Output structure:")
+    print(f"  {output_dir}/")
+    print(f"  ├── summary.json")
+    for m in all_metrics:
+        print(f"  ├── {m['folder_name']}/")
+        print(f"  │   ├── image.nii.gz")
+        print(f"  │   ├── ground_truth.nii.gz")
+        print(f"  │   ├── prediction_raw.nii.gz")
+        print(f"  │   └── prediction_postprocessed.nii.gz")
+    print()
+    print("Aggregate Dice Scores:")
+    print(f"  {'':20} {'Nerve':>12} {'Vessel':>12}")
+    print(f"  {'-'*46}")
+    print(f"  {'Mean Dice (raw)':20} {summary['aggregate']['mean_dice_nerve_raw']:>12.4f} {summary['aggregate']['mean_dice_vessel_raw']:>12.4f}")
+    print(f"  {'Mean Dice (post)':20} {summary['aggregate']['mean_dice_nerve_postproc']:>12.4f} {summary['aggregate']['mean_dice_vessel_postproc']:>12.4f}")
+    print()
+    print("To view in napari, open a sample folder and drag all 4 files in,")
+    print("or run:  napari <folder>/image.nii.gz <folder>/ground_truth.nii.gz <folder>/prediction_postprocessed.nii.gz")
 
 
 if __name__ == "__main__":
