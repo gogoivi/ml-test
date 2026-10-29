@@ -67,18 +67,20 @@ def soft_cldice_loss(pred, target,class_weights=None,thresh_width=10):
     Assuming class 0 is background
     And averages all classes into one loss
     '''
-    total_loss=0
+    total_loss = 0
     num_classes = pred.shape[1]
     
-    # Convert pred logits to probabilities
     pred_soft = F.softmax(pred, dim=1)
-
+    
     if class_weights is None:
         class_weights = [1.0] * (num_classes - 1)
     
-    # Convert target to one-hot: [B, D, H, W] -> [B, C, D, H, W]
-    target_onehot = F.one_hot(target, num_classes)  # [B, D, H, W, C]
-    target_onehot = target_onehot.permute(0, 4, 1, 2, 3).float()  # [B, C, D, H, W]
+    # Handle both hard and soft targets
+    if target.dim() == 4:  # (B, D, H, W) - hard integer labels
+        target_onehot = F.one_hot(target, num_classes)
+        target_onehot = target_onehot.permute(0, 4, 1, 2, 3).float()
+    elif target.dim() == 5:  # (B, C, D, H, W) - already soft probabilities
+        target_onehot = target  # Already in the right format
 
     for i in range(num_classes - 1):
         class_idx = i + 1  # Actual class index (1 for nerve, 2 for vessel)

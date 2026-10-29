@@ -458,12 +458,14 @@ def get_dataloaders(root_dir, batch_size=20, train_split=0.8, num_workers=0, tra
         batch_size=batch_size, 
         shuffle=True,
         num_workers=num_workers,
+        pin_memory=True
     )
     train_no_aug_loader = DataLoader(
         train_no_aug_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        pin_memory=True
     )
     
     test_loader = DataLoader(
@@ -471,6 +473,7 @@ def get_dataloaders(root_dir, batch_size=20, train_split=0.8, num_workers=0, tra
         batch_size=batch_size, 
         shuffle=False,
         num_workers=num_workers,
+        pin_memory=True
     )
     if pseudo_labels is not None:
         return train_loader, train_no_aug_loader,test_loader
