@@ -173,7 +173,7 @@ class KD:
                 # Compute Dice per class
                 for c in [1, 2]:
                     pred_c = (pred_class == c)
-                    gt_c = (y == c)
+                    gt_c = (hard_y == c)  #changed to hard_y for dice
                     
                     intersection[c] += (pred_c & gt_c).sum().item()
                     union[c] += pred_c.sum().item() + gt_c.sum().item()

@@ -37,6 +37,8 @@ model_a = U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
 model_b = U_Net_small(size=size,classes=3,color=False,kernel_size=kernel_size)
 path_a=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_a_latest.pt"
 path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_b_latest.pt"
+trainer_Rips= KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with RipsTopoLossTeachers_A=0.15",stagnation_patience=10,alpha=0.15)
+trainer_Rips.train(total_epochs=300,warmup_epochs=15,update_frequency=1)
 # Create trainer
 
 # trainer = CoTrainer(
@@ -57,8 +59,10 @@ path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 
 # # Link the shared dict
 # trainer.pseudo_labels = pseudo_labels
 
-# # Train
-# trainer.train(total_epochs=300, warmup_epochs=15, update_frequency=1)
 
-trainer= KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with RipsTopoLossTeachers_A=0.15",stagnation_patience=10,alpha=0.15)
-trainer.train(total_epochs=300,warmup_epochs=15,update_frequency=1)
+
+
+#   path_a=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Cubical_TopoLoss(300 epochs)_20261026_083611/model_a_latest.pt"
+#   path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Cubical_TopoLoss(300 epochs)_20261026_083611/model_b_latest.pt"
+#   trainer_CC=KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with CCTopoLossTeachers_A=0.15",stagnation_patience=10,alpha=0.15)
+#   trainer_CC.train(total_epochs=300,warmup_epochs=15,update_frequency=1)

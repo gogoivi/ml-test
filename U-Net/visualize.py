@@ -245,9 +245,9 @@ def main():
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/KD with CCTopoLossTeachers_20261028_014517/model_Student_best.pt",
+        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/KD with CCTopoLossTeachers_A=0.15_20261028_124156/model_Student_best.pt",
         'data_root': r"/home/vgogoi1/projects/TN_Research/2023 Patients",
-        'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results",
+        'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results/KD_CC",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
         'num_samples': 3,    # How many random samples to process
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
