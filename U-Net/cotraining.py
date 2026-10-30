@@ -44,10 +44,13 @@ class CoTrainer:
         root_dir,
         lr_a=1e-4,
         lr_b=1e-4,
-        thresholds=[0.99, 0.95],  # [nerve, vessel]
+        thresholds=[[0.99, 0.95]],  # [nerve, vessel]
         stagnation_patience=5,
         save_dir="checkpoints",
-        experiment_name="cotraining"
+        experiment_name="cotraining",
+        warmup_epochs=15,          # ADD: 0 for rounds after first
+        pseudo_labels=None,        # ADD: carry forward between rounds
+        epochs=20,                 # ADD: per-round epoch count
     ):
         """
         Docstring for __init__
@@ -57,8 +60,8 @@ class CoTrainer:
         :type model_a: nn.Module
         :param model_b: Description
         :type model_b: nn.Module
-        :param thresholds: Description
-        :type thresholds: list
+        :param threshold_array: Description
+        :type thresholds: Array of lists
         :param batch_size: Description
         :type batch_size: int
         :param stagnation: How many epochs of no improvement in validation before the models start to pseudo label
@@ -71,19 +74,27 @@ class CoTrainer:
         self.test_loader = test_loader
         self.device = device
         self.root_dir = root_dir
-        self.thresholds = thresholds
+        self.threshold_array = thresholds
         self.stagnation_patience = stagnation_patience
         
-        # Pseudo-labels dict
-        self.pseudo_labels = {}
         
         # Optimizers - adjust for different settings
         self.optimizer_a = torch.optim.AdamW(model_a.parameters(), lr=lr_a, weight_decay=1e-5)
         self.optimizer_b = torch.optim.SGD(model_b.parameters(), lr=lr_b, momentum=0.99, weight_decay=1e-5)
         
-        # LR Schedulers
-        self.scheduler_a = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_a, T_max=100)
-        self.scheduler_b = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_b, T_max=100)
+        # Instead of always creating empty dict:
+        self.pseudo_labels = pseudo_labels if pseudo_labels is not None else {}
+        
+        # Store warmup and epochs
+        self.warmup_epochs = warmup_epochs
+        self.epochs = epochs
+        
+        self.scheduler_a = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer_a, T_max=epochs+warmup_epochs
+        )
+        self.scheduler_b = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer_b, T_max=epochs+warmup_epochs
+        )
         
         #scalers
         self.scaler_a = GradScaler()
@@ -99,7 +110,10 @@ class CoTrainer:
             smooth_nr=1e-5,
             smooth_dr=1e-5
         )
-        self.topo_loss_fn = None  # initialized in train
+        
+        # Initialize topo loss with warmup
+        # self.topo_loss_fn = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
+        self.topo_loss_fn=Cubical_Complex_Loss_Differentiable(warmup_epochs=self.warmup_epochs)
         
         # Logging
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -112,57 +126,57 @@ class CoTrainer:
         self.best_metric_b = float('inf')
         self.global_step = 0
 
-    def compute_loss(self, pred, gt, epoch, warmup_epochs):
-        """
-        Compute best loss from individual analysis (CE + Dice + clDice + Non-diff Topo)
-        """
-        ce_loss = self.ce_loss_fn(pred, gt)
-        dice_loss = self.dice_loss_fn(pred, gt.unsqueeze(1))
-        cldice_loss = soft_cldice_loss(pred, gt)
-
-        # For topo loss - will return 1 until it gets to after warmup epochs - then it will output a scaling factor for the base loss - in this case CE + Dice + clDice
-        topo_mult = self.topo_loss_fn(pred, gt, epoch, N=warmup_epochs)
-        
-        # Combining loss - using arbitrary weights
-        base_loss = ce_loss + dice_loss + 0.5 * cldice_loss
-        # total_loss = base_loss * topo_mult
-        total_loss = base_loss * topo_mult
-        
-        loss_dict = {
-            'ce': ce_loss.item(),
-            'dice': dice_loss.item(),
-            'cldice': cldice_loss.item(),
-            'topo_mult': topo_mult.item() if torch.is_tensor(topo_mult) else topo_mult,
-            'total': total_loss.item()
-        }
-        
-        return total_loss, loss_dict
-
-    # def compute_loss(self, pred, gt, epoch, warmup_epochs,lam=1e-3):
+    # def compute_loss(self, pred, gt, epoch, warmup_epochs):
     #     """
-    #     Compute best loss from individual analysis (CE + Dice + clDice + Diff Topo)
+    #     Compute best loss from individual analysis (CE + Dice + clDice + Non-diff Topo)
     #     """
     #     ce_loss = self.ce_loss_fn(pred, gt)
     #     dice_loss = self.dice_loss_fn(pred, gt.unsqueeze(1))
     #     cldice_loss = soft_cldice_loss(pred, gt)
 
-    #     topo_loss, topo_log = self.topo_loss_fn(pred, gt, epoch)
+    #     # For topo loss - will return 1 until it gets to after warmup epochs - then it will output a scaling factor for the base loss - in this case CE + Dice + clDice
+    #     topo_mult = self.topo_loss_fn(pred, gt, epoch, N=warmup_epochs)
         
     #     # Combining loss - using arbitrary weights
     #     base_loss = ce_loss + dice_loss + 0.5 * cldice_loss
-    #     total_loss = base_loss + lam * topo_loss
+    #     # total_loss = base_loss * topo_mult
+    #     total_loss = base_loss * topo_mult
         
     #     loss_dict = {
     #         'ce': ce_loss.item(),
     #         'dice': dice_loss.item(),
     #         'cldice': cldice_loss.item(),
-    #         'topo': topo_log,
+    #         'topo_mult': topo_mult.item() if torch.is_tensor(topo_mult) else topo_mult,
     #         'total': total_loss.item()
     #     }
         
     #     return total_loss, loss_dict
 
-    def train_epoch(self, epoch, warmup_epochs):
+    def compute_loss(self, pred, gt, epoch, lam=1e-3):
+        """
+        Compute best loss from individual analysis (CE + Dice + clDice + Diff Topo)
+        """
+        ce_loss = self.ce_loss_fn(pred, gt)
+        dice_loss = self.dice_loss_fn(pred, gt.unsqueeze(1))
+        cldice_loss = soft_cldice_loss(pred, gt)
+
+        topo_loss, topo_log = self.topo_loss_fn(pred, gt, epoch)
+        
+        # Combining loss - using arbitrary weights
+        base_loss = ce_loss + dice_loss + 0.5 * cldice_loss
+        total_loss = base_loss + lam * topo_loss
+        
+        loss_dict = {
+            'ce': ce_loss.item(),
+            'dice': dice_loss.item(),
+            'cldice': cldice_loss.item(),
+            'topo': topo_log,
+            'total': total_loss.item()
+        }
+        
+        return total_loss, loss_dict
+
+    def train_epoch(self, epoch):
         """
         Train both models for one epoch.
         """
@@ -182,7 +196,7 @@ class CoTrainer:
             
             with autocast(device_type='cuda'):
                 pred_a = self.model_a(X)
-                loss_a, loss_dict_a = self.compute_loss(pred_a, y, epoch, warmup_epochs)
+                loss_a, loss_dict_a = self.compute_loss(pred_a, y, epoch)
             
             self.scaler_a.scale(loss_a).backward()
             self.scaler_a.step(self.optimizer_a)
@@ -192,7 +206,7 @@ class CoTrainer:
             
             with autocast(device_type='cuda'):
                 pred_b = self.model_b(X)
-                loss_b, loss_dict_b = self.compute_loss(pred_b, y, epoch, warmup_epochs)
+                loss_b, loss_dict_b = self.compute_loss(pred_b, y, epoch)
             
             self.scaler_b.scale(loss_b).backward()
             self.scaler_b.step(self.optimizer_b)
@@ -343,7 +357,7 @@ class CoTrainer:
             total += pseudo['mask'].sum().item()
         return total
 
-    def train(self, total_epochs=100, warmup_epochs=10, update_frequency=1):
+    def train(self, update_frequency=1):
         """
         Main training loop with co-training and pseudo-labels. (structure and basic code provided by claude as I have already done training loops multiple times and wanted something done quick)
         
@@ -355,61 +369,75 @@ class CoTrainer:
         self.model_a.to(self.device)
         self.model_b.to(self.device)
         
-        # Initialize topo loss with warmup
-        self.topo_loss_fn = TopologyAwareLoss(alpha=5e-6, beta=1e-4, warmup_epochs=warmup_epochs)
-        # self.topo_loss_fn=Cubical_Complex_Loss_Differentiable(warmup_epochs=warmup_epochs)
+
         
         # Tracking
         stagnation_count = 0
         pseudo_mode = False
         best_combined_dice = 0
-        
-        for epoch in range(total_epochs):
-            # train 1 epoch
-            train_loss_a, train_loss_b, train_dict_a, train_dict_b = self.train_epoch(epoch, warmup_epochs)
+        for i in range(len(self.threshold_array)):
+            self.thresholds=self.threshold_array[i]
+            if i!=0:
+                self.epochs=temp
+                self.warmup_epochs=0
+                self.topo_loss_fn.warmup_epochs=0
+                self.scheduler_a = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer_a, T_max=self.epochs
+                )
+                self.scheduler_b = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer_b, T_max=self.epochs
+                )
+                stagnation_count=0
+            else:
+                temp=self.epochs
+                self.epochs+=self.warmup_epochs
+            for epoch in range(self.epochs):
+                # train 1 epoch
+                train_loss_a, train_loss_b, train_dict_a, train_dict_b = self.train_epoch(epoch)
 
-            self.scheduler_a.step()
-            self.scheduler_b.step()
-            
-            # validate every N
-            if epoch % update_frequency == 0:
-                dice_a, dice_b, val_loss_a, val_loss_b = self.validate()
+                self.scheduler_a.step()
+                self.scheduler_b.step()
                 
-                #  Right now verification metric is avg dice - but should change to appropriate later (essentially replace lines 345 to 348 with relevant new metric)
-                current_metric = (dice_a[2] + dice_b[2]) / 2
-                
-                if current_metric > best_combined_dice:
-                    best_combined_dice = current_metric
-                    stagnation_count = 0
+                # validate every N
+                if epoch % update_frequency == 0:
+                    dice_a, dice_b, val_loss_a, val_loss_b = self.validate()
                     
-                    # Save best models
-                    self.save_checkpoint(epoch, 'a', is_best=True)
-                    self.save_checkpoint(epoch, 'b', is_best=True)
-                    print(f"  New best! Combined Dice: {current_metric:.4f}")
-                else:
-                    stagnation_count += 1
-                    print(f"  No improvement. Stagnation: {stagnation_count}/{self.stagnation_patience}")
-                
-                # Pseudo mode?
-                if stagnation_count >= self.stagnation_patience and not pseudo_mode:
-                    pseudo_mode = True
-                    print("\n" + "="*50)
-                    print("ENTERING PSEUDO-LABEL MODE")
-                    print("="*50 + "\n")
-                
-                # Update pseudo-labels if pseudo mode
-                if pseudo_mode:
-                    print("  Updating pseudo-labels...")
-                    self.update_all_pseudo_labels()
-                
-                # Logs
-                pseudo_count = len(self.pseudo_labels)
-                self.log_metrics(epoch, train_dict_a, train_dict_b, dice_a, dice_b, 
-                               val_loss_a, val_loss_b,self.get_pseudo_label_stats())
-                
-                # Save latest models
-                self.save_checkpoint(epoch, 'a', is_best=False)
-                self.save_checkpoint(epoch, 'b', is_best=False)
+                    #  Right now verification metric is avg dice - but should change to appropriate later (essentially replace lines 345 to 348 with relevant new metric)
+                    current_metric = (dice_a[2] + dice_b[2]) / 2
+                    
+                    if current_metric > best_combined_dice:
+                        best_combined_dice = current_metric
+                        stagnation_count = 0
+                        
+                        # Save best models
+                        self.save_checkpoint(epoch, 'a', is_best=True)
+                        self.save_checkpoint(epoch, 'b', is_best=True)
+                        print(f"  New best! Combined Dice: {current_metric:.4f}")
+                    else:
+                        stagnation_count += 1
+                        print(f"  No improvement. Stagnation: {stagnation_count}/{self.stagnation_patience}")
+                    
+                    # Pseudo mode?
+                    if stagnation_count >= self.stagnation_patience and not pseudo_mode:
+                        pseudo_mode = True
+                        stagnation_count=0
+                        print("\n" + "="*50)
+                        print("ENTERING PSEUDO-LABEL MODE")
+                        print("="*50 + "\n")
+                    
+                    # Update pseudo-labels if pseudo mode
+                    if pseudo_mode:
+                        print("  Updating pseudo-labels...")
+                        self.update_all_pseudo_labels()
+                    
+                    # Logs
+                    pseudo_count = len(self.pseudo_labels)
+                    self.log_metrics(epoch+i*self.epochs, train_dict_a, train_dict_b, dice_a, dice_b, 
+                                val_loss_a, val_loss_b,self.get_pseudo_label_stats())
+                    
+                    # Save latest models
+                    self.save_checkpoint(epoch, 'a', is_best=False)
+                    self.save_checkpoint(epoch, 'b', is_best=False)
         
         self.writer.close()
         print(f"\nDone. Best combined Dice: {best_combined_dice:.4f}")
@@ -464,15 +492,13 @@ class CoTrainer:
                         continue
 
             # For remove I made the threshold it needed to stay above 10% lower - so it doesnt need to pred with 95 pct plus certainty everytime - it just needs to stay above ~85 ish)
-            remove = ((pred_a[class_idx] < (self.thresholds[c]-0.1)) | (pred_b[class_idx] < (self.thresholds[c]-0.1))) & class_mask.to(self.device)
+            remove = ((pred_a[class_idx] < max(self.thresholds[c] - 0.1, 0.7)) | (pred_b[class_idx] < max(self.thresholds[c] - 0.1, 0.7))) & class_mask.to(self.device)
             remove=remove.cpu()
             self.pseudo_labels[sample_idx]['confidence'][remove]=0
             self.pseudo_labels[sample_idx]['mask'][remove]=False
             self.pseudo_labels[sample_idx]['classes'][remove]=0
 
-
     def update_all_pseudo_labels(self):
-        """Run through training data w/o aug to update labels"""
         self.model_a.eval()
         self.model_b.eval()
         
@@ -483,17 +509,68 @@ class CoTrainer:
                 pred_a = F.softmax(self.model_a(X), dim=1)
                 pred_b = F.softmax(self.model_b(X), dim=1)
                 
-                for i in range(X.shape[0]):
-                    idx = indices[i].item()
-                    self.generate_pseudo_labels(idx, pred_a[i], pred_b[i], y[i])
-                    self.remove_uncertain_pseudos(idx,pred_a[i],pred_b[i])
+                # remove
+                for c in range(pred_a.shape[1] - 1):
+                    class_idx = c + 1
+                    remove_thresh = max(self.thresholds[c] - 0.1, 0.7)
+                    
+                    # batch
+                    uncertain = (
+                        (pred_a[:, class_idx] < remove_thresh) | 
+                        (pred_b[:, class_idx] < remove_thresh)
+                    )
+                    uncertain_cpu = uncertain.cpu()
+                    
+                    for i in range(X.shape[0]):
+                        idx = indices[i].item()
+                        if idx not in self.pseudo_labels:
+                            continue
+
+                        class_mask = (
+                            self.pseudo_labels[idx]['mask'] & 
+                            (self.pseudo_labels[idx]['classes'] == class_idx)
+                        )
+                        remove = uncertain_cpu[i] & class_mask
+                        
+                        if remove.any():
+                            self.pseudo_labels[idx]['mask'][remove] = False
+                            self.pseudo_labels[idx]['classes'][remove] = 0
+                            self.pseudo_labels[idx]['confidence'][remove] = 0
+                
+                is_background = (y == 0)
+                
+                for c in range(pred_a.shape[1] - 1):
+                    class_idx = c + 1
+                    
+                    confident = (
+                        (pred_a[:, class_idx] > self.thresholds[c]) & 
+                        (pred_b[:, class_idx] > self.thresholds[c])
+                    )
+                    new_masks = is_background & confident
+                    avg_conf = (pred_a[:, class_idx] + pred_b[:, class_idx]) / 2
+                    
+                    new_masks_cpu = new_masks.cpu()
+                    avg_conf_cpu = avg_conf.cpu()
+                    
+                    for i in range(X.shape[0]):
+                        idx = indices[i].item()
+                        
+                        if idx not in self.pseudo_labels:
+                            self.pseudo_labels[idx] = {
+                                'mask': torch.zeros_like(y[0], dtype=torch.bool).cpu(),
+                                'classes': torch.zeros_like(y[0], dtype=torch.long).cpu(),
+                                'confidence': torch.zeros_like(y[0], dtype=torch.float).cpu(),
+                            }
+                        
+                        sample_mask = new_masks_cpu[i]
+                        self.pseudo_labels[idx]['mask'] |= sample_mask
+                        self.pseudo_labels[idx]['classes'][sample_mask] = class_idx
+                        self.pseudo_labels[idx]['confidence'][sample_mask] = avg_conf_cpu[i][sample_mask]
         
         self.model_a.train()
         self.model_b.train()
-    
 
-    def merge_gt_with_pseudo(self, y, sample_indices,weight:int=0.8):
-
+    def merge_gt_with_pseudo(self, y, sample_indices):
         y_merged = y.clone()
         
         for i in range(y.shape[0]):
@@ -504,12 +581,12 @@ class CoTrainer:
             
             pseudo = self.pseudo_labels[idx]
             
-            # pseudo-labels & gt is background
-            apply_mask = pseudo['mask'] & (y[i] == 0)
+            # Move to same device as y for the comparison
+            mask_on_device = pseudo['mask'].to(y.device)
+            classes_on_device = pseudo['classes'].to(y.device)
             
-            # CHange labels
-            y_merged[i][apply_mask] = pseudo['classes'][apply_mask]
-
+            apply_mask = mask_on_device & (y[i] == 0)
+            y_merged[i][apply_mask] = classes_on_device[apply_mask]
         
         return y_merged
 
@@ -524,7 +601,7 @@ class CoTrainer:
         nerve_voxels = 0
         vessel_voxels = 0
         
-        for sample_idx, pseudo in self.pseudo_labels.items():
+        for _, pseudo in self.pseudo_labels.items():
             mask = pseudo['mask']
             classes = pseudo['classes']
             

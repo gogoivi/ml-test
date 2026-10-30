@@ -37,11 +37,11 @@ torch.manual_seed(RANDOM_SEED)
 torch.cuda.manual_seed(RANDOM_SEED)
 
 class KD:
-    def __init__(self,model_a,model_b,path_model_a,path_model_b,root_dir:str,size=48,epochs=120,
+    def __init__(self,model_a,model_b,path_model_a,path_model_b,root_dir:str,student=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size),size=48,epochs=120,
                  batch_size=20,kernel_size=3,alpha:float=0.5,warmup_epochs:int=15,lr=0.0005,thresholds:list=[0.8,0.8],lam=1e-4,
                  stagnation_patience:int=5,save_dir="checkpoints",experiment_name="Knowledge Distill"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.student=U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
+        self.student=student
         self.teacher_a=model_a
         self.teacher_b=model_b
         self.alpha=alpha

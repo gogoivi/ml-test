@@ -41,7 +41,7 @@ def compute_persistence_diagram(points, max_dimension=1,size:int=20):
     
     return simplex_tree.persistence()
 
-def subsample_points(points, max_points=200):
+def subsample_points(points, max_points=500):
     """
     points: (N, 3) array of surface coordinates
     max_points: maximum number of points to keep

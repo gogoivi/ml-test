@@ -35,29 +35,31 @@ train_loader, train_loader_no_aug, test_loader = get_dataloaders(
 
 model_a = U_Net(size=size,classes=3,color=False,kernel_size=kernel_size)
 model_b = U_Net_small(size=size,classes=3,color=False,kernel_size=kernel_size)
-path_a=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_a_latest.pt"
-path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_b_latest.pt"
-trainer_Rips= KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with RipsTopoLossTeachers_A=0.15",stagnation_patience=10,alpha=0.15)
-trainer_Rips.train(total_epochs=300,warmup_epochs=15,update_frequency=1)
+# path_a=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_a_latest.pt"
+# path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_b_latest.pt"
+# trainer_Rips= KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with RipsTopoLossTeachers_A=0.15",stagnation_patience=10,alpha=0.15)
+# trainer_Rips.train(total_epochs=300,warmup_epochs=15,update_frequency=1)
 # Create trainer
 
-# trainer = CoTrainer(
-#     model_a=model_a,
-#     model_b=model_b,
-#     train_loader=train_loader,
-#     train_loader_no_aug=train_loader_no_aug,
-#     test_loader=test_loader,
-#     device=device,
-#     root_dir=ROOT_DIR,
-#     lr_a=1e-4,
-#     lr_b=1e-3,
-#     thresholds=[0.99, 0.95],
-#     stagnation_patience=6,
-#     experiment_name="Rips_TopoLoss(300 epochs)" 
-# )
+trainer = CoTrainer(
+    model_a=model_a,
+    model_b=model_b,
+    train_loader=train_loader,
+    train_loader_no_aug=train_loader_no_aug,
+    test_loader=test_loader,
+    device=device,
+    root_dir=ROOT_DIR,
+    lr_a=1e-4,
+    lr_b=1e-3,
+    thresholds=[[0.99, 0.95],[0.975,0.925],[0.975,0.9],[0.95,0.875]],
+    stagnation_patience=4,
+    experiment_name="Iterative_CoTraining_Cubical",
+    epochs=30
+)
 
-# # Link the shared dict
-# trainer.pseudo_labels = pseudo_labels
+# Link the shared dict
+trainer.pseudo_labels = pseudo_labels
+trainer.train()
 
 
 
