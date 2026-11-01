@@ -41,30 +41,30 @@ model_b = U_Net_small(size=size,classes=3,color=False,kernel_size=kernel_size)
 # trainer_Rips.train(total_epochs=300,warmup_epochs=15,update_frequency=1)
 # Create trainer
 
-trainer = CoTrainer(
-    model_a=model_a,
-    model_b=model_b,
-    train_loader=train_loader,
-    train_loader_no_aug=train_loader_no_aug,
-    test_loader=test_loader,
-    device=device,
-    root_dir=ROOT_DIR,
-    lr_a=1e-4,
-    lr_b=1e-3,
-    thresholds=[[0.99, 0.95],[0.975,0.925],[0.975,0.9],[0.95,0.875]],
-    stagnation_patience=4,
-    experiment_name="Iterative_CoTraining_Cubical",
-    epochs=30
-)
+# trainer = CoTrainer(
+#     model_a=model_a,
+#     model_b=model_b,
+#     train_loader=train_loader,
+#     train_loader_no_aug=train_loader_no_aug,
+#     test_loader=test_loader,
+#     device=device,
+#     root_dir=ROOT_DIR,
+#     lr_a=1e-4,
+#     lr_b=1e-3,
+#     thresholds=[[0.99, 0.95],[0.975,0.925],[0.975,0.9],[0.95,0.875]],
+#     stagnation_patience=4,
+#     experiment_name="Iterative_CoTraining_Rips",
+#     epochs=30
+# )
 
-# Link the shared dict
-trainer.pseudo_labels = pseudo_labels
-trainer.train()
-
-
+# # Link the shared dict
+# trainer.pseudo_labels = pseudo_labels
+# trainer.train()
 
 
-#   path_a=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Cubical_TopoLoss(300 epochs)_20261026_083611/model_a_latest.pt"
-#   path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Cubical_TopoLoss(300 epochs)_20261026_083611/model_b_latest.pt"
-#   trainer_CC=KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with CCTopoLossTeachers_A=0.15",stagnation_patience=10,alpha=0.15)
-#   trainer_CC.train(total_epochs=300,warmup_epochs=15,update_frequency=1)
+
+
+path_a=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Iterative_CoTraining_Cubical_20261029_160137/model_a_latest.pt"
+path_b=r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Iterative_CoTraining_Cubical_20261029_160137/model_b_latest.pt"
+trainer_CC=KD(model_a=model_a,model_b=model_b,path_model_a=path_a,path_model_b=path_b,root_dir=ROOT_DIR,experiment_name="KD with CCTopoLossTeachers_A=0.25",stagnation_patience=10,alpha=0.25)
+trainer_CC.train(total_epochs=150,warmup_epochs=15,update_frequency=1)
