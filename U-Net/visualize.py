@@ -245,11 +245,16 @@ def main():
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_a_latest.pt",
-        'data_root': r"/home/vgogoi1/projects/TN_Research/2023 Patients",
-        'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results/CoTrain/Non-Iter",
+        # 'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/KD with CCTopoLossTeachers_A=0.15_20261028_124156/model_Student_best.pt",
+        # 'data_root': r"/home/vgogoi1/projects/TN_Research/2023 Patients",
+        # 'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results/KD_CC",
+
+        'checkpoint_path': r"C:\Users\gogoi\Desktop\ml-test\overnight_results\comparison_20261018_184359\20261019_021723_CE_Dice_clDice_TopoNonDiff\checkpoints\best_model.pth",
+        'data_root': r"C:\Users\gogoi\Desktop\ml-test\2023 Patients",
+        'output_dir': r"C:\Users\gogoi\Desktop\ml-test\inference_results/CE_Dice_clDice_TopoNonDiff",
+
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
-        'num_samples': 6,    # How many random samples to process
+        'num_samples': 3,    # How many random samples to process
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         
         # Model architecture (must match training!)
