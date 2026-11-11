@@ -245,11 +245,11 @@ def main():
     # ============== CONFIGURATION ==============
     # UPDATE THIS PATH to your trained model!
     CONFIG = {
-        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/KD with CCTopoLossTeachers_A=0.25_20261031_113947/model_Student_best.pt",
+        'checkpoint_path': r"/home/vgogoi1/projects/TN_Research/U-Net/checkpoints/Rips_TopoLoss(300 epochs)_20261027_004906/model_a_latest.pt",
         'data_root': r"/home/vgogoi1/projects/TN_Research/2023 Patients",
-        'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results/CoTrainingIterative",
+        'output_dir': r"/home/vgogoi1/projects/TN_Research/inference_results/CoTrain/Non-Iter",
         'file_type': 'all',  # 'all', 'nifti', or 'tiff'
-        'num_samples': 3,    # How many random samples to process
+        'num_samples': 6,    # How many random samples to process
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         
         # Model architecture (must match training!)

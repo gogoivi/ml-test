@@ -1,0 +1,14 @@
+{
+  "case_id": "64402927.nii.gz_7bf1414e43",
+  "side": "left",
+  "center_voxels_rto": [
+    93,
+    63,
+    171
+  ],
+  "voxel_spacing_mm": [
+    0.6,
+    0.6,
+    0.6
+  ]
+}

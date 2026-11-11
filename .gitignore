@@ -36,6 +36,8 @@ overnight.py
 
 tensorboard/
 inference_results/
+crop_data/
+vae_output/
 #  Get rid on non u-net stuff
 *.log
 

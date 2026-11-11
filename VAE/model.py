@@ -2,6 +2,7 @@ from torch import nn
 import torch
 from matplotlib import pyplot as plt
 
+ # ------------------ 2D VAE -------------------
 class VAE(nn.Module):
     def __init__(self,z_size:int,height,width,color:bool=True):
         super().__init__()
@@ -78,4 +79,5 @@ def generate_image(model:VAE,device):
     plt.axis("off")
     plt.show()
 
+# -------------------------- 3D VAE ----------------------------------
 
